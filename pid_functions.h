@@ -28,7 +28,7 @@ enum {
 
 };
 
-static const double minParamValue = 0.01;
+static const double minParamValue = 0.0001;
 
 class InputFunction {
 public:

@@ -122,9 +122,9 @@ TEST(pidAutoTune, testPidCoefs) {
 	params[PARAM_L] = 1.52685;
 
 	// todo: is it correct?
-	double dTime = 2;
+	double dTime = 1;
 	for (int idx = 0; idx <= 4; idx++) {
-		PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<1024>(13.0, 16.0, dTime, pidParams[idx], params);
+		PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<2048>(13.0, 14.0, dTime, pidParams[idx], params);
 #ifdef PID_DEBUG
 		printf("Metric result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
 #endif
@@ -133,7 +133,7 @@ TEST(pidAutoTune, testPidCoefs) {
 	// todo: check results
 }
 
-#if 1
+#if 0
 GTEST_API_ int main(int argc, char **argv) {
 	//testPidCoefs();
 
@@ -148,7 +148,7 @@ GTEST_API_ int main(int argc, char **argv) {
 	testSOPDTOverdamped();
 	testChsSopdtPid();
 #endif	
-	//::testing::GTEST_FLAG(filter) = "*testPidCoefs*";
+	::testing::GTEST_FLAG(filter) = "*testPidCoefs*";
 	int result = RUN_ALL_TESTS();
 	// windows ERRORLEVEL in Jenkins batch file seems to want negative value to detect failure
 	return result == 0 ? 0 : -1;

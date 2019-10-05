@@ -59,6 +59,10 @@ public:
 				}
 				curIdx++;
 			} else if (j == outputIdx) {
+				/*const float alpha = 0.5f;
+				float fv = alpha * prevV + (1.0f - alpha) * (float)v;
+				prevV = v;
+				data.push_back(fv);*/
 				data.push_back((float)v);
 			}
 		}
@@ -69,9 +73,10 @@ public:
 	std::vector<float> data;
 	double minValue = 0, maxValue = 0, stepPoint = -1.0, maxPoint = 0;
 	int curIdx = -1;
+	float prevV = 0;
 };
 
-#if 0
+#if 1
 int main(int argc, char **argv) {
 	if (argc < 6) {
 		printf("Usage: PID_FROM_MSL file.msl start_time end_time input_column output_column...\r\n");
@@ -85,7 +90,8 @@ int main(int argc, char **argv) {
 		return -2;
 	}
 
-	printf("PID_FROM_MSL: Calculating...\r\n");
+	printf("PID_FROM_MSL: minValue=%g maxValue=%g stepPoint=%g maxPoint=%g Calculating...\r\n",
+		data.minValue, data.maxValue, data.stepPoint, data.maxPoint);
 
 	PidAutoTuneChrSopdt chr;
 	double params0[4];
@@ -100,8 +106,6 @@ int main(int argc, char **argv) {
 		chr.addData(data.data[i]);
 	}
 
-	double stepPoint = 178;	// todo: adjust for the buffer scale
-	double maxPoint = 460;
 	chr.findPid(PID_TUNE_CHR2, data.minValue, data.maxValue, data.stepPoint, data.maxPoint, params0);
 
 	printf("Done!\r\n");
@@ -111,6 +115,10 @@ int main(int argc, char **argv) {
 	const pid_s & pid = chr.getPid();
 	printf("PID: P=%f I=%f D=%f offset=%f\r\n", pid.pFactor, pid.iFactor, pid.dFactor, pid.offset);
 
+	// todo: is it correct?
+	double dTime = 1;
+	PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<2048>(chr.getAvgMeasuredMin(), chr.getAvgMeasuredMax(), dTime, pid, p);
+	printf("Metric result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
 
 	return 0;
 }
