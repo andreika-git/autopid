@@ -22,7 +22,10 @@ public:
 			return false;
 		
 		curIdx = -1;
-		stepPoint = -1.0;
+		settings.minValue = settings.maxValue = settings.maxPoint = 0;
+		settings.timeScale = 1,
+		settings.stepPoint = -1.0;
+		totalTime = 0;
 
 		std::string str;
 		for (int i = 0; std::getline(fp, str); i++) {
@@ -32,8 +35,10 @@ public:
 			parseLine(str, startTime, endTime, inputIdx, outputIdx);
 		}
 		
-		maxPoint = curIdx - 1;
+		settings.maxPoint = curIdx - 1;
 		assert(data.size() == curIdx);
+
+		settings.timeScale = settings.maxPoint / totalTime;
 
 		fp.close();
 		return true;
@@ -48,14 +53,18 @@ public:
 			if (j == 0) {
 				if (v < startTime || v > endTime)
 					return false;
+				if (curIdx < 0)
+					prevTime = v;
+				totalTime += v - prevTime;
+				prevTime = v;
 			} else if (j == inputIdx) {
 				// this is an input step, we should find it
 				if (curIdx < 0) {
-					minValue = v;
+					settings.minValue = v;
 					curIdx = 0;
-				} else if (v != minValue && stepPoint < 0) {
-					maxValue = v;
-					stepPoint = curIdx;
+				} else if (v != settings.minValue && settings.stepPoint < 0) {
+					settings.maxValue = v;
+					settings.stepPoint = curIdx;
 				}
 				curIdx++;
 			} else if (j == outputIdx) {
@@ -71,7 +80,8 @@ public:
 
 public:
 	std::vector<float> data;
-	double minValue = 0, maxValue = 0, stepPoint = -1.0, maxPoint = 0;
+	double totalTime = 0, prevTime = 0;
+	PidAutoTuneSettings settings;
 	int curIdx = -1;
 	float prevV = 0;
 };
@@ -90,10 +100,11 @@ int main(int argc, char **argv) {
 		return -2;
 	}
 
-	printf("PID_FROM_MSL: minValue=%g maxValue=%g stepPoint=%g maxPoint=%g Calculating...\r\n",
-		data.minValue, data.maxValue, data.stepPoint, data.maxPoint);
+	printf("PID_FROM_MSL: minValue=%g maxValue=%g stepPoint=%g maxPoint=%g timeScale=%g Calculating...\r\n",
+		data.settings.minValue, data.settings.maxValue, data.settings.stepPoint, data.settings.maxPoint, data.settings.timeScale);
 
 	PidAutoTuneChrSopdt chr;
+	/*
 	double params0[4];
 
 	// todo: find better initial values?
@@ -101,12 +112,12 @@ int main(int argc, char **argv) {
 	params0[PARAM_T] = 1;
 	params0[PARAM_T2] = 1;
 	params0[PARAM_L] = 1;
-
+	*/
 	for (size_t i = 0; i < data.data.size(); i++) {
 		chr.addData(data.data[i]);
 	}
 
-	chr.findPid(PID_TUNE_CHR2, data.minValue, data.maxValue, data.stepPoint, data.maxPoint, params0);
+	chr.findPid(PID_TUNE_CHR2, data.settings, nullptr);
 
 	printf("Done!\r\n");
 
@@ -116,7 +127,7 @@ int main(int argc, char **argv) {
 	printf("PID: P=%f I=%f D=%f offset=%f\r\n", pid.pFactor, pid.iFactor, pid.dFactor, pid.offset);
 
 	// todo: is it correct?
-	double dTime = 1;
+	double dTime = 1.0 / data.settings.timeScale;
 	PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<2048>(chr.getAvgMeasuredMin(), chr.getAvgMeasuredMax(), dTime, pid, p);
 	printf("Metric result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
 

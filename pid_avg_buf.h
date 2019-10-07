@@ -16,10 +16,13 @@
 template<int maxPoints>
 class AveragingDataBuffer {
 public:
-	AveragingDataBuffer() {
+	// no default ctors!
+
+	void init() {
 		// zero buffer
 		memset(buf, 0, sizeof(buf));
 		num = 0;
+		scaleShift = 0;
 	}
 
 	void addDataPoint(float v) {
@@ -86,7 +89,25 @@ public:
 		return avg;
 	}
 
-protected:
+	int findDataAt(float v, int from, int to) const {
+		for (int i = from; i <= to; i++) {
+			if (buf[i] > v)
+				return i;
+		}
+		return -1;
+	}
+
+	// integrating using simple trapezoidal method
+	float getArea(int from, int to, float v0) const {
+		float sum = 0.0f;
+		for (int i = from; i < to; i++) {
+			sum += buf[i] + buf[i + 1] - 2.0f * v0;
+		}
+		// assume the time step is 1.0
+		return sum * 0.5f;
+	}
+
+public:
 	float buf[maxPoints];
 	int num = 0;
 	int scaleShift = 0;

@@ -28,33 +28,48 @@ enum {
 
 };
 
-static const double minParamValue = 0.0001;
+static const double minParamValue = 0.00001;
 
 class InputFunction {
 public:
-	virtual double getValue(double i) const = 0;
+	InputFunction(double timeScale_) : timeScale(timeScale_) {
+	}
+
+	// i = index, d = delay time (in seconds?)
+	virtual double getValue(double i, double d) const = 0;
+
+	virtual double getTimeScale() const {
+		return timeScale;
+	}
+
+protected:
+	// time scale needed to synchronize between the virtual step function and the real measured data
+	//  timeScale=100 means 100 points per second.
+	double timeScale;
 };
 
 // Heaviside step function interpolated between 'min' and 'max' values with 'stepPoint' time offset
 class StepFunction : public InputFunction
 {
 public:
-	StepFunction(double minValue_, double maxValue_, double offset_, double stepPoint_) :
-				minValue(minValue_), maxValue(maxValue_), offset(offset_), stepPoint(stepPoint_) {
+	StepFunction(double minValue_, double maxValue_, double offset_, double stepPoint_, double timeScale_) :
+				minValue(minValue_), maxValue(maxValue_), offset(offset_), stepPoint(stepPoint_), InputFunction(timeScale_) {
 	}
 
-	virtual double getValue(double i) const {
+	virtual double getValue(double i, double d) const {
+		// delayed index
+		double id = i - d * timeScale;
 #ifdef INTERPOLATED_STEP_FUNCTION
 		// the delay parameter L may not be integer, so we have to interpolate between the closest input values (near and far in the past)
-		int I = (int)i;
-		double fract = i - I;	// 0 = choose near value, 1 = choose far value
+		int I = (int)id;
+		double fract = id - I;	// 0 = choose near value, 1 = choose far value
 		// find two closest input values for the given delay
 		double vNear = (I < stepPoint) ? minValue : maxValue;
 		double vFar = (I + 1 < stepPoint) ? minValue : maxValue;
 		// interpolate
 		return offset + vFar * fract + vNear * (1.0f - fract);
 #else
-		return offset + ((i < stepPoint) ? minValue : maxValue);
+		return offset + ((id < stepPoint) ? minValue : maxValue);
 #endif
 	}
 
@@ -69,14 +84,18 @@ private:
 template <int numPoints>
 class StoredDataInputFunction : public InputFunction {
 public:
+	StoredDataInputFunction(double timeScale_) : InputFunction(timeScale_) {
+		inputData.init();
+	}
+
 	void addDataPoint(float v) {
 		// todo: support data scaling
 		assert(inputData.getNumDataPoints() <= numPoints);
 		inputData.addDataPoint(v);
 	}
 
-	virtual double getValue(double i) const {
-		return inputData.getValue((float)i);
+	virtual double getValue(double i, double d) const {
+		return inputData.getValue((float)(i - d * timeScale));
 	}
 
 private:
@@ -131,15 +150,15 @@ public:
 		double pT = fmax(params[PARAM_T], minParamValue);
 
 		// state-space params
-		double lambda = exp(-1.0 / pT);
+		double lambda = exp(-1.0 / (pT * inputFunc->getTimeScale()));
 
 		// todo: find better initial value?
-		double y = inputFunc->getValue(0) * params[PARAM_K];
+		double y = inputFunc->getValue(0, 0) * params[PARAM_K];
 		
 		// The FO response function is indirect, so we need to iterate all previous values to find the current one
 		for (int j = 0; j <= i; j++) {
 			// delayed input
-			double inp = inputFunc->getValue((double)j - pL);
+			double inp = inputFunc->getValue((double)j, pL);
 
 			// indirect model response in Controllable Canonical Form (1st order CCF)
 			y = lambda * y + params[PARAM_K] * (1.0 - lambda) * inp;
@@ -171,17 +190,17 @@ public:
 		double pT2 = fmax(params[PARAM_T2], minParamValue);
 
 		// state-space params
-		double lambda = exp(-1.0 / pT);
-		double lambda2 = exp(-1.0 / pT2);
+		double lambda = exp(-1.0 / (pT * inputFunc->getTimeScale()));
+		double lambda2 = exp(-1.0 / (pT2 * inputFunc->getTimeScale()));
 
 		// todo: find better initial values?
-		double x = inputFunc->getValue(0) * params[PARAM_K];
-		double y = inputFunc->getValue(0) * params[PARAM_K];
+		double x = inputFunc->getValue(0, 0) * params[PARAM_K];
+		double y = inputFunc->getValue(0, 0) * params[PARAM_K];
 
 		// The SO response function is indirect, so we need to iterate all previous values to find the current one
 		for (int j = 0; j <= i; j++) {
 			// delayed input
-			double inp = inputFunc->getValue((double)j - pL);
+			double inp = inputFunc->getValue((double)j, pL);
 
 			// indirect model response in Controllable Canonical Form (2nd order CCF)
 			y = lambda2 * y + (1.0 - lambda2) * x;
@@ -191,3 +210,50 @@ public:
 	}
 };
 
+// Harriot's relation function (based on the graph)
+// Used to approximate initial parameters for SOPDT model
+// See: findSecondOrderInitialParamsHarriot() and "Harriot P. Process control (1964). McGraw-Hill. USA."
+class HarriotFunction {
+public:
+	double getValue(double x) const {
+		return buf.getValue((float)((x - 2.8 / 719.0 - 0.26) * 719.0 / 2.8));
+	}
+
+private:
+	const AveragingDataBuffer<34> buf = { {
+		0.500000000f,
+		0.589560440f,
+		0.624725275f,
+		0.652747253f,
+		0.675274725f,
+		0.694505495f,
+		0.712637363f,
+		0.729120879f,
+		0.743406593f,
+		0.757142857f,
+		0.769780220f,
+		0.781318681f,
+		0.793956044f,
+		0.804395604f,
+		0.814285714f,
+		0.824725275f,
+		0.834065934f,
+		0.844505495f,
+		0.853296703f,
+		0.862637363f,
+		0.870879121f,
+		0.880219780f,
+		0.889010989f,
+		0.897802198f,
+		0.906593407f,
+		0.915384615f,
+		0.924175824f,
+		0.933516484f,
+		0.942857143f,
+		0.953296703f,
+		0.963736264f,
+		0.975274725f,
+		0.986813187f,
+		1.000000000f
+	}, 34, 0 };
+};

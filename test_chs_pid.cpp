@@ -17,6 +17,7 @@ extern void testMatrixInverse();
 TEST(pidAutoTune, testMeasuredDataBuffer) {
 	const int numPoints = 2;
 	AveragingDataBuffer<numPoints> buf;
+	buf.init();
 	for (int i = 0; i < 16; i++) {
 		buf.addDataPoint((float)(i + 1));
 		float v = (float)(1 << (int)(log(i) / log(2.0)));
@@ -29,7 +30,7 @@ TEST(pidAutoTune, testMeasuredDataBuffer) {
 }
 
 TEST(pidAutoTune, testFOPDT) {
-	StepFunction stepFunc(0, 100, 0, 10);
+	StepFunction stepFunc(0, 100, 0, 10, 1.0);
 	FirstOrderPlusDelayLineFunction func(&stepFunc, nullptr, 0);
 	double params[3];
 	params[PARAM_K] = 2.0;
@@ -41,7 +42,7 @@ TEST(pidAutoTune, testFOPDT) {
 }
 
 TEST(pidAutoTune, testSOPDTOverdamped) {
-	StepFunction stepFunc(0, 100, 0, 10);
+	StepFunction stepFunc(0, 100, 0, 10, 1.0);
 	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0);
 	double params[4];
 	params[PARAM_K] = 2.0;
@@ -58,7 +59,7 @@ static const float outputData[] = { 13.29, 13.29, 13.33, 13.33, 13.33, 13.33, 13
 const int numData = sizeof(outputData) / sizeof(outputData[0]);
 
 void printSOPDT() {
-	StepFunction stepFunc(20.0, 30.0, 32.823277, 178);
+	StepFunction stepFunc(20.0, 30.0, 32.823277, 178, 1.0);
 	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0);
 	double params[4];
 	params[PARAM_K] = 0.251778;
@@ -68,7 +69,7 @@ void printSOPDT() {
 
 	for (int i = 0; i < numData; i++) {
 		double v = func.getEstimatedValueAtPoint(i, params);
-		printf("%d,%f,%f,%f\r\n", i, outputData[i], v, stepFunc.getValue((float)i));
+		printf("%d,%f,%f,%f\r\n", i, outputData[i], v, stepFunc.getValue((float)i, 0));
 	}
 }
 
@@ -87,9 +88,13 @@ TEST(pidAutoTune, chsSopdtPid) {
 			chr.addData(outputData[i]);
 		}
 
-		double stepPoint = 178;	// todo: adjust for the buffer scale
-		double maxPoint = 460;
-		if (chr.findPid(PID_TUNE_CHR2, 20.0, 30.0, stepPoint, maxPoint, params0))
+		PidAutoTuneSettings settings;
+		settings.minValue = 20.0;
+		settings.maxValue = 30.0;
+		settings.stepPoint = 178;	// todo: adjust for the buffer scale
+		settings.maxPoint = 460;
+		settings.timeScale = 1.0;
+		if (chr.findPid(PID_TUNE_CHR2, settings, params0))
 			break;
 		// todo: the solver has failed. Choose other initial params?
 		// params0[0] = ; params0[1] = ; params0[2] = ;
