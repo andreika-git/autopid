@@ -7,8 +7,7 @@
 
 #include "global.h"
 
-#include "pid_open_loop_models.h"
-#include "pid_controller.h"
+#include "pid_auto.h"
 
 extern void testGaussianFunction();
 extern void testMatrixInverse();
@@ -31,7 +30,7 @@ TEST(pidAutoTune, testMeasuredDataBuffer) {
 
 TEST(pidAutoTune, testFOPDT) {
 	StepFunction stepFunc(0, 100, 0, 10, 1.0);
-	FirstOrderPlusDelayLineFunction func(&stepFunc, nullptr, 0);
+	FirstOrderPlusDelayLineFunction func(&stepFunc, nullptr, 0, minParamT0);
 	double params[3];
 	params[PARAM_K] = 2.0;
 	params[PARAM_T] = 3.0;
@@ -43,7 +42,7 @@ TEST(pidAutoTune, testFOPDT) {
 
 TEST(pidAutoTune, testSOPDTOverdamped) {
 	StepFunction stepFunc(0, 100, 0, 10, 1.0);
-	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0);
+	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0, minParamT0);
 	double params[4];
 	params[PARAM_K] = 2.0;
 	params[PARAM_T] = 3.0;
@@ -60,7 +59,7 @@ const int numData = sizeof(outputData) / sizeof(outputData[0]);
 
 void printSOPDT() {
 	StepFunction stepFunc(20.0, 30.0, 32.823277, 178, 1.0);
-	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0);
+	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0, minParamT0);
 	double params[4];
 	params[PARAM_K] = 0.251778;
 	params[PARAM_T] = 55.7078;
@@ -129,7 +128,7 @@ TEST(pidAutoTune, testPidCoefs) {
 	// todo: is it correct?
 	double dTime = 1;
 	for (int idx = 0; idx <= 4; idx++) {
-		PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<2048>(13.0, 14.0, dTime, pidParams[idx], params);
+		PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<2048>(2, 13.0, 14.0, dTime, pidParams[idx], params);
 #ifdef PID_DEBUG
 		printf("Metric result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
 #endif

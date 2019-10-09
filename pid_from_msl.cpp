@@ -9,8 +9,7 @@
 #include <fstream>
 #include <vector>
 
-#include "pid_open_loop_models.h"
-#include "pid_controller.h"
+#include "pid_auto.h"
 
 
 class MslData {
@@ -35,7 +34,7 @@ public:
 			parseLine(str, startTime, endTime, inputIdx, outputIdx);
 		}
 		
-		settings.maxPoint = curIdx - 1;
+		settings.maxPoint = getSaturationStartPoint();
 		assert(data.size() == curIdx);
 
 		settings.timeScale = settings.maxPoint / totalTime;
@@ -73,9 +72,37 @@ public:
 				prevV = v;
 				data.push_back(fv);*/
 				data.push_back((float)v);
+				if (curIdx >= 0 && settings.stepPoint < 0) {
+					// calculate averaged level to determine the acceptable noise level
+					averagedMin = (averagedMin * (curIdx - 1) + v) / curIdx;
+					// this is not accurate because 'averagedMin' is continuously changing
+					acceptableNoiseLevel = std::max(acceptableNoiseLevel, abs(v - averagedMin));
+				}
 			}
 		}
 		return true;
+	}
+
+	double getSaturationStartPoint() {
+		int i;
+		double j;
+		// max noise level is used to get the saturation limit of the signal
+		double curNoiseLevel = 0, averagedMax = 0;
+		// we step back some points from the last one and find the saturation start
+		for (i = curIdx - 1, j = 1.0; i > settings.stepPoint; i--, j += 1.0) {
+			double v = data[i];
+			averagedMax = (averagedMax * (j - 1) + v) / j;
+			// this is not accurate because 'averagedMax' is continuously changing
+			curNoiseLevel = std::max(curNoiseLevel, abs(v - averagedMax));
+			
+			// we assume that the "upper" level noise is like the same as the "lower" noise, so we compare them,
+			// and if the noise level starts growing, then we're in the step transient zone, and we stop
+			if (curNoiseLevel > acceptableNoiseLevel) {
+				break;
+			}
+		}
+		// return the point in the middle, just to be safe (we don't want to be close to the transient zone)
+		return (curIdx - 1 + i) / 2;
 	}
 
 public:
@@ -84,6 +111,11 @@ public:
 	PidAutoTuneSettings settings;
 	int curIdx = -1;
 	float prevV = 0;
+	
+	// we assume that the signal is quasi-stable (asymptotic) from the start point until the 'stepPoint';
+	// it's noise level is used to find the saturation limit of the rest of the data (see getSaturationStartPoint())
+	double acceptableNoiseLevel = 0;
+	double averagedMin = 0;
 };
 
 #if 1
@@ -93,43 +125,49 @@ int main(int argc, char **argv) {
 		return -1;
 	}
 	
-	printf("PID_FROM_MSL: Reading file %s...\r\n", argv[1]);
+	printf("PID_FROM_MSL - find PID controller coefficients based on a measured step response in a rusEFI log file.\r\n");
+	printf("Version 0.1 (c) andreika, 2019\r\n\r\n");
+	printf("Reading file %s...\r\n", argv[1]);
 	
 	MslData data;
 	if (!data.readMsl(argv[1], atof(argv[2]), atof(argv[3]), atoi(argv[4]), atoi(argv[5]))) {
 		return -2;
 	}
 
-	printf("PID_FROM_MSL: minValue=%g maxValue=%g stepPoint=%g maxPoint=%g timeScale=%g Calculating...\r\n",
-		data.settings.minValue, data.settings.maxValue, data.settings.stepPoint, data.settings.maxPoint, data.settings.timeScale);
+	printf("Measuring Settings: minValue=%g maxValue=%g stepPoint=%g maxPoint=%g numPoints=%d timeScale=%g\r\n",
+		data.settings.minValue, data.settings.maxValue, data.settings.stepPoint, data.settings.maxPoint, data.data.size(), data.settings.timeScale);
 
-	PidAutoTuneChrSopdt chr;
-	/*
-	double params0[4];
+	PidAutoTuneChrSopdt chr1, chr2;
 
-	// todo: find better initial values?
-	params0[PARAM_K] = 0.1;
-	params0[PARAM_T] = 1;
-	params0[PARAM_T2] = 1;
-	params0[PARAM_L] = 1;
-	*/
 	for (size_t i = 0; i < data.data.size(); i++) {
-		chr.addData(data.data[i]);
+		chr1.addData(data.data[i]);
+		chr2.addData(data.data[i]);
 	}
 
-	chr.findPid(PID_TUNE_CHR2, data.settings, nullptr);
+	// todo: more flexible method chooser
+	PidTuneMethod method = PID_TUNE_CHR1;
+	printf("\r\nTrying method CHR1:\r\n");
+	chr1.findPid(method, data.settings, nullptr);
+	
+	method = PID_TUNE_CHR2;
+	printf("\r\nTrying method CHR2:\r\n");
+	chr2.findPid(method, data.settings, nullptr);
 
 	printf("Done!\r\n");
 
-	const double *p = chr.getParams();
-	printf("Model Params: K=%g T1=%g T2=%g L=%g\r\n", p[PARAM_K], p[PARAM_T], p[PARAM_T2], p[PARAM_L]);
-	const pid_s & pid = chr.getPid();
-	printf("PID: P=%f I=%f D=%f offset=%f\r\n", pid.pFactor, pid.iFactor, pid.dFactor, pid.offset);
+	PidAutoTuneChrSopdt *chr[2] = { &chr1, &chr2 };
+	for (int k = 0; k < 2; k++) {
+		const double *p = chr[k]->getParams();
+		printf("Model-%d Params: K=%g T1=%g T2=%g L=%g\r\n", (k + 1), p[PARAM_K], p[PARAM_T], p[PARAM_T2], p[PARAM_L]);
+		const pid_s & pid = chr[k]->getPid();
+		printf("  PID: P=%f I=%f D=%f offset=%f\r\n", pid.pFactor, pid.iFactor, pid.dFactor, pid.offset);
 
-	// todo: is it correct?
-	double dTime = 1.0 / data.settings.timeScale;
-	PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<2048>(chr.getAvgMeasuredMin(), chr.getAvgMeasuredMax(), dTime, pid, p);
-	printf("Metric result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
+		// todo: is it correct?
+		double dTime = 1.0 / data.settings.timeScale;
+		PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<2048>(chr[k]->getMethodOrder(method), 
+			chr[k]->getAvgMeasuredMin(), chr[k]->getAvgMeasuredMax(), dTime, pid, p);
+		printf("  Metric result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
+	}
 
 	return 0;
 }

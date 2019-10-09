@@ -19,7 +19,7 @@ template <int numParams>
 class LMSFunction {
 public:
 	// Get the total number of data points
-	virtual double getNumPoints() = 0;
+	virtual double getNumPoints() const = 0;
 
 	virtual void justifyParams(double *params) const = 0;
 
@@ -74,7 +74,7 @@ public:
 			bool isSolved = calcNewParameters();
 			double newMerit = calcMerit(newParameters);
 			if (!isSolved) {
-				return -1;
+				return -iterationCount;
 			}
 			// if we don't like the new parameters
 			if (newMerit >= merit) {
@@ -103,6 +103,16 @@ public:
 		return parameters;
 	}
 	
+	// Calculate the sum of the squares of the residuals
+	double calcMerit(double *params) {
+		double res = 0;
+		for (int i = 0; i < func->getNumPoints(); i++) {
+			double r = func->getResidual(i, params);
+			res += r * r;
+		}
+		return res;
+	}
+
 protected:
 	// Find the parameter increments by solving the Hessian x Gradient equation
 	bool calcNewParameters() {
@@ -122,17 +132,6 @@ protected:
 		}
 		func->justifyParams(newParameters);
 		return true;
-	}
-
-
-	// Calculate the sum of the squares of the residuals
-	double calcMerit(double *params) {
-		double res = 0;
-		for (int i = 0; i < func->getNumPoints(); i++) {
-			double r = func->getResidual(i, params);
-			res += r * r;
-		}
-		return res;
 	}
 
 	/// Calculate the Hessian matrix (2nd derivative) approximation
