@@ -137,7 +137,7 @@ int main(int argc, char **argv) {
 	printf("Measuring Settings: minValue=%g maxValue=%g stepPoint=%g maxPoint=%g numPoints=%d timeScale=%g\r\n",
 		data.settings.minValue, data.settings.maxValue, data.settings.stepPoint, data.settings.maxPoint, data.data.size(), data.settings.timeScale);
 
-	PidAutoTuneChrSopdt chr1, chr2;
+	PidAutoTune chr1, chr2;
 
 	for (size_t i = 0; i < data.data.size(); i++) {
 		chr1.addData(data.data[i]);
@@ -145,28 +145,35 @@ int main(int argc, char **argv) {
 	}
 
 	// todo: more flexible method chooser
-	PidTuneMethod method = PID_TUNE_CHR1;
-	printf("\r\nTrying method CHR1:\r\n");
+	PidTuneMethod method = PID_TUNE_AUTO1;
+	printf("\r\nTrying method Auto1:\r\n");
 	chr1.findPid(method, data.settings, nullptr);
 	
-	method = PID_TUNE_CHR2;
-	printf("\r\nTrying method CHR2:\r\n");
+	method = PID_TUNE_AUTO2;
+	printf("\r\nTrying method Auto2:\r\n");
 	chr2.findPid(method, data.settings, nullptr);
 
 	printf("Done!\r\n");
 
-	PidAutoTuneChrSopdt *chr[2] = { &chr1, &chr2 };
+	// todo: is it correct?
+	double dTime = 1.0 / data.settings.timeScale;
+	const int numSimPoints = 1024;
+
+	PidAutoTune *chr[2] = { &chr1, &chr2 };
 	for (int k = 0; k < 2; k++) {
 		const double *p = chr[k]->getParams();
 		printf("Model-%d Params: K=%g T1=%g T2=%g L=%g\r\n", (k + 1), p[PARAM_K], p[PARAM_T], p[PARAM_T2], p[PARAM_L]);
-		const pid_s & pid = chr[k]->getPid();
-		printf("  PID: P=%f I=%f D=%f offset=%f\r\n", pid.pFactor, pid.iFactor, pid.dFactor, pid.offset);
+		const pid_s pid0 = chr[k]->getPid0();
+		const pid_s pid = chr[k]->getPid();
+		printf("  PID0: P=%.8f I=%.8f D=%.8f offset=%.8f\r\n", pid0.pFactor, pid0.iFactor, pid0.dFactor, pid0.offset);
 
-		// todo: is it correct?
-		double dTime = 1.0 / data.settings.timeScale;
-		PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<2048>(chr[k]->getMethodOrder(method), 
-			chr[k]->getAvgMeasuredMin(), chr[k]->getAvgMeasuredMax(), dTime, pid, p);
-		printf("  Metric result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
+		PidSimulator<numSimPoints> sim(chr[k]->getMethodOrder(method), chr[k]->getAvgMeasuredMin(), chr[k]->getAvgMeasuredMax(), dTime, true);
+		PidAccuracyMetric metric0 = sim.simulate(numSimPoints, pid0, p);
+		printf("  Metric0 result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric0.getItae(), metric0.getIse(), metric0.getMaxOvershoot() * 100.0);
+
+		printf("  PID:  P=%.8f I=%.8f D=%.8f offset=%.8f\r\n", pid.pFactor, pid.iFactor, pid.dFactor, pid.offset);
+		PidAccuracyMetric metric = sim.simulate(numSimPoints, pid, p);
+		printf("  Metric result:  ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
 	}
 
 	return 0;

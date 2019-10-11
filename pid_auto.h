@@ -18,6 +18,7 @@
 #include "pid_avg_buf.h"
 #include "pid_controller.h"
 #include "pid_open_loop_models.h"
+#include "pid_sim.h"
 #include "output_csv.h"
 
 
@@ -29,10 +30,10 @@ public:
 	double timeScale;
 };
 
-// PID auto-tune method using Chien-Hrones-Reswick rules and SOPDT model
-class PidAutoTuneChrSopdt {
+// PID auto-tune method using different tuning rules and FOPDT/SOPDT models
+class PidAutoTune {
 public:
-	PidAutoTuneChrSopdt() {
+	PidAutoTune() {
 		measuredData.init();
 	}
 
@@ -49,6 +50,12 @@ public:
 		this->settings = settings;
 		// without offset we cannot fit the analytic curve
 		double offset = findOffset();
+		
+		pid.offset = (float)offset;
+		// todo: where do we get them?
+		pid.minValue = 0;
+		pid.maxValue = 100;
+
 #ifdef PID_DEBUG
 		printf("* offset=%g avgMin=%g avgMax=%g\r\n", offset, avgMeasuredMin, avgMeasuredMax);
 #endif
@@ -96,10 +103,10 @@ public:
 				const int numParams1stOrder = 3;
 				outputFunc<numParams1stOrder>("pid_func0.csv", func, stepFunc, params);
 				LevenbergMarquardtSolver<numParams1stOrder> solver(&func, params);
-				merit0 = solver.calcMerit(params);
+				merit0 = func.calcMerit(params);
 				iterationCount = solver.solve(minParamT);
 				outputFunc<numParams1stOrder>("pid_func.csv", func, stepFunc, params);
-				merit = solver.calcMerit(params);
+				merit = func.calcMerit(params);
 			}
 			else {
 				// 2nd order or approximated 2nd->1st order
@@ -108,10 +115,10 @@ public:
 				const int numParams2ndOrder = 4;
 				outputFunc<numParams2ndOrder>("pid_func0.csv", func, stepFunc, params);
 				LevenbergMarquardtSolver<numParams2ndOrder> solver(&func, params);
-				merit0 = solver.calcMerit(params);
+				merit0 = func.calcMerit(params);
 				iterationCount = solver.solve(minParamT);
 				outputFunc<numParams2ndOrder>("pid_func.csv", func, stepFunc, params);
-				merit = solver.calcMerit(params);
+				merit = func.calcMerit(params);
 			}
 
 #ifdef PID_DEBUG
@@ -126,7 +133,8 @@ public:
 
 		ModelOpenLoopPlant *model = nullptr;
 		switch (method) {
-		case PID_TUNE_CHR1: {
+		case PID_TUNE_CHR1:
+		case PID_TUNE_AUTO1: {
 			static ModelChienHronesReswickFirstOrder chr(params);
 			model = &chr;
 			break;
@@ -143,7 +151,8 @@ public:
 			model = &chr;
 			break;
 		}
-		case PID_TUNE_CHR2: {
+		case PID_TUNE_CHR2:
+		case PID_TUNE_AUTO2: {
 			static ModelChienHronesReswickSecondOrder chr(params);
 			model = &chr;
 			break;
@@ -165,10 +174,19 @@ public:
 		pid.iFactor = model->getKi();
 		pid.dFactor = model->getKd();
 
-		pid.offset = (float)offset;
-		// todo: where do we get them?
-		pid.minValue = 0;
-		pid.maxValue = 100;
+		pid0 = pid;
+
+		// for "automatic" methods, we try to make coefs even better!
+		if (method == PID_TUNE_AUTO1 || method == PID_TUNE_AUTO2) {
+#ifdef PID_DEBUG
+			printf("* Solving for better coefs:\r\n");
+#endif
+			ModelAutoSolver autoSolver(model);
+			solveModel(method, autoSolver);
+			pid.pFactor = autoSolver.getKp();
+			pid.iFactor = autoSolver.getKi();
+			pid.dFactor = autoSolver.getKd();
+		}
 
 		return true;
 	}
@@ -177,6 +195,7 @@ public:
 		switch (method) {
 			// 1st order
 		case PID_TUNE_CHR1:
+		case PID_TUNE_AUTO1:
 			return 1;
 			// 2nd order
 		default:
@@ -184,51 +203,16 @@ public:
 		}
 	}
 
-	template <int numPoints>
-	static PidAccuracyMetric simulatePid(int order, double target1, double target2, double dTime, const pid_s & pidParams, const double *params) {
-		StoredDataInputFunction<numPoints> plantInput(1.0 / dTime);
-		FirstOrderPlusDelayLineFunction plant1(&plantInput, nullptr, 0, minParamT0);
-		SecondOrderPlusDelayLineOverdampedFunction plant2(&plantInput, nullptr, 0, minParamT0);
-		LMSFunction<4> *plant;
-		if (order == 1)
-			plant = (LMSFunction<4> *)&plant1;
-		else
-			plant = &plant2;
-
-		PidParallelController pid(pidParams);
-		//PidDerivativeFilterController pid(pidParams, 10);
-		double target = target1;
-
-		PidAccuracyMetric metric;
-		// guess a previous state to minimize the system "shock"
-		plantInput.addDataPoint((float)(target / params[PARAM_K]) - pidParams.offset);
-		// simulate over time
-		for (int i = 1; i < numPoints; i++) {
-			// make a step in the middle
-			if (i > numPoints / 2)
-				target = target2;
-			// "measure" the current value of the plant
-			double pidInput = plant->getEstimatedValueAtPoint(i, params);
-			// wait for the controller reaction
-			double pidOutput = pid.getOutput(target, pidInput, dTime);
-			// apply the reaction to the plant's pidInput
-			plantInput.addDataPoint((float)pidOutput);
-			metric.addPoint((double)i / (double)numPoints, pidInput, target);
-#ifdef PID_DEBUG
-			output_csv((order == 1) ? "pid_test.csv" : "pid_test2.csv", (double)i, pidInput, pidOutput, target);
-#endif
-		}
-
-		return metric;
-	}
-
-
 	double const *getParams() const {
 		return params;
 	}
 
 	pid_s const &getPid() const {
 		return pid;
+	}
+
+	pid_s const &getPid0() const {
+		return pid0;
 	}
 
 	double getAvgMeasuredMin() const {
@@ -367,6 +351,26 @@ public:
 		return (double)(i1 - settings.stepPoint) / settings.timeScale;
 	}
 
+	// Use automatic LM-solver to find the best PID coefs which satisfy the minimal PID metric.
+	// The initial PID coefs are already calculated using the well-known CHR method (1st or 2nd order).
+	bool solveModel(PidTuneMethod method, ModelAutoSolver & model) {
+		// todo: is it correct?
+		double dTime = 1.0 / settings.timeScale;
+		const int numSimPoints = 1024;
+		PidSimulatorFactory<numSimPoints> simFactory(getMethodOrder(method), getAvgMeasuredMin(), getAvgMeasuredMax(), dTime, pid);
+		PidCoefsFinderFunction<numSimPoints> func(&simFactory, params);
+
+		// now hopefully we'll find even better coefs!
+		LevenbergMarquardtSolver<numParamsForPid> solver((LMSFunction<numParamsForPid> *)&func, model.getParams());
+		int iterationCount = solver.solve();
+#ifdef PID_DEBUG
+		if (iterationCount > 0)
+			printf("* The solver finished in %d iterations!\r\n", iterationCount);
+		else
+			printf("* The solver aborted after %d iterations!\r\n", -iterationCount);
+#endif
+		return true;
+	}
 	
 	template <int numParams>
 	void outputFunc(const char *fname, const AbstractDelayLineFunction<numParams> & func, const StepFunction & stepFunc, double *params) {
@@ -384,6 +388,7 @@ protected:
 	PidAutoTuneSettings settings;
 	double params[4] = { 0 };
 	pid_s pid;
+	pid_s pid0;	// not-optimized
 	int iterationCount = 0;
 	double avgMeasuredMin, avgMeasuredMax;
 };

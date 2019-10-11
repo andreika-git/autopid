@@ -94,6 +94,13 @@ protected:
 // Calculate ITAE/ISE and Overshoot
 class PidAccuracyMetric {
 public:
+	void reset() {
+		itae = 0;
+		ise = 0;
+		maxOvershoot = 0;
+		lastValue = 0;
+	}
+
 	void addPoint(double i, double value, double target) {
 		double e = target - value;
 		itae += i * fabs(e);
@@ -101,6 +108,7 @@ public:
 		double overshoot = (value - target) / target;
 		if (overshoot > 0 && overshoot > maxOvershoot)
 			maxOvershoot = overshoot;
+		lastValue = value;
 	}
 
 	double getItae() const {
@@ -115,8 +123,13 @@ public:
 		return maxOvershoot;
 	}
 
+	double getLastValue() const {
+		return lastValue;
+	}
+
 private:
 	double itae = 0;	// Integral time-weighted absolute error
 	double ise = 0;		// Integral square error
 	double maxOvershoot = 0;
+	double lastValue = 0;
 };

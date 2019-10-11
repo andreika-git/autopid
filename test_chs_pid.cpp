@@ -73,7 +73,7 @@ void printSOPDT() {
 }
 
 TEST(pidAutoTune, chsSopdtPid) {
-	PidAutoTuneChrSopdt chr;
+	PidAutoTune chr;
 	double params0[4];
 	
 	// todo: find better initial values?
@@ -127,8 +127,10 @@ TEST(pidAutoTune, testPidCoefs) {
 
 	// todo: is it correct?
 	double dTime = 1;
+	const int numSimPoints = 2048;
+	PidSimulator<numSimPoints> sim(2, 13.0, 14.0, dTime, true);
 	for (int idx = 0; idx <= 4; idx++) {
-		PidAccuracyMetric metric = PidAutoTuneChrSopdt::simulatePid<2048>(2, 13.0, 14.0, dTime, pidParams[idx], params);
+		PidAccuracyMetric metric = sim.simulate(numSimPoints, pidParams[idx], params);
 #ifdef PID_DEBUG
 		printf("Metric result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
 #endif

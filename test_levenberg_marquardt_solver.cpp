@@ -21,7 +21,7 @@ public:
 	}
 
 	// Get the total number of data points
-	virtual double getNumPoints() const {
+	virtual int getNumPoints() const {
 		return numPoints;
 	}
 

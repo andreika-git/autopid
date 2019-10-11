@@ -1,4 +1,4 @@
-/*
+﻿/*
 * @file	levenberg_marquardt_solver.h
 *
 * Levenberg-Marquardt Algorithm, and efficient non-linear optimization solver used for regression analysis ("least squares problem").
@@ -15,11 +15,16 @@
 
 #include "matrix_helper.h"
 
+#ifndef LM_USE_CACHE
+#define LM_USE_CACHE
+#endif /* LM_USE_CACHE */
+
+// Used to get all the values for the Levenberg-Marquardt solver.
 template <int numParams>
 class LMSFunction {
 public:
 	// Get the total number of data points
-	virtual double getNumPoints() const = 0;
+	virtual int getNumPoints() const = 0;
 
 	virtual void justifyParams(double *params) const = 0;
 
@@ -29,9 +34,24 @@ public:
 	/// Returns the residual (error delta) of the function (return (dataPoints[i] - estimatedPoint(i)))
 	virtual double getResidual(int i, const double *params) const = 0;
 
+	// Calculate the sum of the squares of the residuals
+	virtual double calcMerit(double *params) const {
+		double res = 0;
+		for (int i = 0; i < getNumPoints(); i++) {
+			double r = getResidual(i, params);
+			res += r * r;
+		}
+		return res;
+	}
+
 	/// Return the partial derivate of the function with respect to parameter pIndex at point [i].
 	/// Can be overridden if analytical gradient function's representation is available
 	virtual double getPartialDerivative(int i, const double *params, int pIndex) const {
+#ifdef LM_USE_CACHE
+		return pderivs[pIndex][i];
+	}
+	virtual double getPartialDerivativeInternal(int i, const double *params, int pIndex) const {
+#endif
 		// some magic value
 		const double delta = 1.0e-6;
 		// we need to alter parameters around the neighborhood of 'pIndex', so we make a working copy
@@ -47,13 +67,31 @@ public:
 
 		return (dplusResult - dminusResult) / (delta * 2.0);
 	}
+
+#ifdef LM_USE_CACHE
+	void calculateAllPartialDerivatives(const double *params) {
+		for (int i = 0; i < numParams; i++) {
+			pderivs[i].resize(getNumPoints());
+		}
+		for (int p = 0; p < numParams; p++) {
+			for (int i = 0; i < getNumPoints(); i++) {
+				pderivs[p][i] = getPartialDerivativeInternal(i, params, p);
+			}
+		}
+	}
+#endif
+
+private:
+#ifdef LM_USE_CACHE
+	std::vector<double> pderivs[numParams];
+#endif
 };
 
 template<int numParams>
 class LevenbergMarquardtSolver {
 public:
 	// ctor
-	LevenbergMarquardtSolver(LMSFunction<numParams> *func, double parameters[numParams]) {
+	LevenbergMarquardtSolver(LMSFunction<numParams> *func, double *parameters) {
 		this->func = func;
 		this->parameters = parameters;
 	}
@@ -68,11 +106,15 @@ public:
 		
 		double delta = 0;
 		do {
-			double merit = calcMerit(parameters);
+			double merit = func->calcMerit(parameters);
+
+#ifdef LM_USE_CACHE
+			func->calculateAllPartialDerivatives(parameters);
+#endif
 			calcGradient();
 			calcHessian();
 			bool isSolved = calcNewParameters();
-			double newMerit = calcMerit(newParameters);
+			double newMerit = func->calcMerit(newParameters);
 			if (!isSolved) {
 				return -iterationCount;
 			}
@@ -91,8 +133,8 @@ public:
 			// find out if we progressed enough in this iteration
 			delta = fabs(newMerit - merit);
 #ifdef LMS_DEBUG
-			printf("[%d] (%g,%g,%g,%g) l=%g m=%g (%g-%g = %g)\r\n", iterationCount, parameters[0], parameters[1], parameters[2], parameters[3], lambda, merit,
-				newMerit, merit, newMerit - merit);
+			printf("[%d] (%g,%g,%g,%g) l=%g merit %g->%g, dm=%g\r\n", iterationCount, parameters[0], parameters[1], parameters[2], parameters[3], lambda, 
+				merit, newMerit, newMerit - merit);
 #endif
 			iterationCount++;
 		} while (delta > minDelta && iterationCount < maxIterations);
@@ -103,16 +145,6 @@ public:
 		return parameters;
 	}
 	
-	// Calculate the sum of the squares of the residuals
-	double calcMerit(double *params) {
-		double res = 0;
-		for (int i = 0; i < func->getNumPoints(); i++) {
-			double r = func->getResidual(i, params);
-			res += r * r;
-		}
-		return res;
-	}
-
 protected:
 	// Find the parameter increments by solving the Hessian x Gradient equation
 	bool calcNewParameters() {

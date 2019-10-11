@@ -28,6 +28,14 @@ enum {
 
 };
 
+// PID model params:
+enum {
+	PARAM_Kp = 0,
+	PARAM_Ki,
+	PARAM_Kd,
+};
+const int numParamsForPid = 3;
+
 // the limit used for K and L params
 static const double minParamKL = 0.00001;
 
@@ -90,6 +98,10 @@ template <int numPoints>
 class StoredDataInputFunction : public InputFunction {
 public:
 	StoredDataInputFunction(double timeScale_) : InputFunction(timeScale_) {
+		reset();
+	}
+
+	void reset() {
 		inputData.init();
 	}
 
@@ -125,7 +137,7 @@ public:
 	virtual double getEstimatedValueAtPoint(int i, const double *params) const = 0;
 
 	// Get the total number of data points
-	virtual double getNumPoints() const {
+	virtual int getNumPoints() const {
 		return numPoints;
 	}
 
