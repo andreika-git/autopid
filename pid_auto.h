@@ -28,6 +28,7 @@ public:
 	double minValue, maxValue;
 	double stepPoint, maxPoint;
 	double timeScale;
+	double targetValue;
 };
 
 // PID auto-tune method using different tuning rules and FOPDT/SOPDT models
@@ -45,21 +46,21 @@ public:
 	// stepPoint - data index where the step was done
 	// maxPoint - data index where the output was saturated
 	// this is not thread-safe (because of internal static vars) but anyway it works...
-	bool findPid(PidTuneMethod method, const PidAutoTuneSettings & settings, const double *initialParams) {
-		// save current settings
+	bool findPid(pid_sim_type_e simType, pid_tune_method_e method, const PidAutoTuneSettings & settings, const double *initialParams) {
+		// save current settings & simType
 		this->settings = settings;
-		// without offset we cannot fit the analytic curve
-		double offset = findOffset();
+		this->simType = simType;
+		// without bias we cannot fit the analytic curve
+		modelBias = findModelBias();
 		
-		pid.offset = (float)offset;
 		// todo: where do we get them?
 		pid.minValue = 0;
 		pid.maxValue = 100;
 
 #ifdef PID_DEBUG
-		printf("* offset=%g avgMin=%g avgMax=%g\r\n", offset, avgMeasuredMin, avgMeasuredMax);
+		printf("* modelBias=%g avgMin=%g avgMax=%g\r\n", modelBias, avgMeasuredMin, avgMeasuredMax);
 #endif
-		StepFunction stepFunc(settings.minValue, settings.maxValue, offset, settings.stepPoint, settings.timeScale);
+		StepFunction stepFunc(settings.minValue, settings.maxValue, settings.stepPoint, settings.timeScale);
 
 		int methodOrder = getMethodOrder(method);
 
@@ -89,47 +90,39 @@ public:
 			memcpy(params, initialParams, sizeof(params));
 		}
 
-		// try to solve several times unless we see some progress (iterationCount > 1)
-		for (double minParamT = minParamT0; minParamT <= minParamT1; minParamT *= 10.0) {
-			double merit0, merit;
+		double merit0, merit;
 #ifdef PID_DEBUG
-			printf("* Solving with minParamT=%g...\r\n", minParamT);
+		printf("* Solving...\r\n");
 #endif
-			// create and start solver
-			if (methodOrder == 1) {
-				// 1st order
-				FirstOrderPlusDelayLineFunction func(&stepFunc, measuredData.getBuf(), measuredData.getNumDataPoints(), minParamT);
-				func.justifyParams(params);
-				const int numParams1stOrder = 3;
-				outputFunc<numParams1stOrder>("pid_func0.csv", func, stepFunc, params);
-				LevenbergMarquardtSolver<numParams1stOrder> solver(&func, params);
-				merit0 = func.calcMerit(params);
-				iterationCount = solver.solve(minParamT);
-				outputFunc<numParams1stOrder>("pid_func.csv", func, stepFunc, params);
-				merit = func.calcMerit(params);
-			}
-			else {
-				// 2nd order or approximated 2nd->1st order
-				SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, measuredData.getBuf(), measuredData.getNumDataPoints(), minParamT);
-				func.justifyParams(params);
-				const int numParams2ndOrder = 4;
-				outputFunc<numParams2ndOrder>("pid_func0.csv", func, stepFunc, params);
-				LevenbergMarquardtSolver<numParams2ndOrder> solver(&func, params);
-				merit0 = func.calcMerit(params);
-				iterationCount = solver.solve(minParamT);
-				outputFunc<numParams2ndOrder>("pid_func.csv", func, stepFunc, params);
-				merit = func.calcMerit(params);
-			}
+		// create and start solver
+		if (methodOrder == 1) {
+			// 1st order
+			FirstOrderPlusDelayLineFunction func(&stepFunc, measuredData.getBuf(), measuredData.getNumDataPoints(), modelBias);
+			func.justifyParams(params);
+			const int numParams1stOrder = 3;
+			outputFunc<numParams1stOrder>("pid_func01.csv", func, stepFunc, params);
+			LevenbergMarquardtSolver<numParams1stOrder> solver(&func, params);
+			merit0 = func.calcMerit(params);
+			iterationCount = solver.solve(minParamT);
+			outputFunc<numParams1stOrder>("pid_func1.csv", func, stepFunc, params);
+			merit = func.calcMerit(params);
+		}
+		else {
+			// 2nd order or approximated 2nd->1st order
+			SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, measuredData.getBuf(), measuredData.getNumDataPoints(), modelBias);
+			func.justifyParams(params);
+			const int numParams2ndOrder = 4;
+			outputFunc<numParams2ndOrder>("pid_func02.csv", func, stepFunc, params);
+			LevenbergMarquardtSolver<numParams2ndOrder> solver(&func, params);
+			merit0 = func.calcMerit(params);
+			iterationCount = solver.solve(minParamT);
+			outputFunc<numParams2ndOrder>("pid_func2.csv", func, stepFunc, params);
+			merit = func.calcMerit(params);
+		}
 
 #ifdef PID_DEBUG
-			if (iterationCount > 0)
-				printf("* The solver finished in %d iterations! Merit (%g -> %g)\r\n", iterationCount, merit0, merit);
-			else
-				printf("* The solver aborted after %d iterations! Merit (%g -> %g)\r\n", -iterationCount, merit0, merit);
+		printSolverResult(iterationCount, merit0, merit);
 #endif
-			if (abs(iterationCount) > 1)
-				break;
-		}
 
 		ModelOpenLoopPlant *model = nullptr;
 		switch (method) {
@@ -141,7 +134,7 @@ public:
 		}
 		case PID_TUNE_IMC2_1: {
 			ModelFopdtApproximatedFromSopdt fo(params);
-			static ModelImcPidFirstOrder imc(fo.getParams());
+			static ModelRiveraMorariFirstOrder imc(fo.getParams());
 			model = &imc;
 			break;
 		}
@@ -173,14 +166,13 @@ public:
 		pid.pFactor = model->getKp();
 		pid.iFactor = model->getKi();
 		pid.dFactor = model->getKd();
+		pid.offset = getPidOffset(model);
+		pid.periodMs = 1000.0 / settings.timeScale;
 
 		pid0 = pid;
 
-		// for "automatic" methods, we try to make coefs even better!
+		// for "automatic" methods, we try to make the coeffs even better!
 		if (method == PID_TUNE_AUTO1 || method == PID_TUNE_AUTO2) {
-#ifdef PID_DEBUG
-			printf("* Solving for better coefs:\r\n");
-#endif
 			ModelAutoSolver autoSolver(model);
 			solveModel(method, autoSolver);
 			pid.pFactor = autoSolver.getKp();
@@ -191,7 +183,7 @@ public:
 		return true;
 	}
 
-	int getMethodOrder(PidTuneMethod method) {
+	int getMethodOrder(pid_tune_method_e method) {
 		switch (method) {
 			// 1st order
 		case PID_TUNE_CHR1:
@@ -223,7 +215,12 @@ public:
 		return avgMeasuredMax;
 	}
 
-	double findOffset() {
+	double getModelBias() const {
+		return modelBias;
+	}
+
+	// The model output is typically shifted
+	double findModelBias() {
 		if (settings.stepPoint < 0 || settings.maxPoint <= settings.stepPoint || settings.maxPoint > measuredData.getNumDataPoints())
 			return 0;
 		// find the real 'min value' of the measured output data (before the step function goes up).
@@ -233,8 +230,15 @@ public:
 
 		if (avgMeasuredMax == avgMeasuredMin)
 			return 0;
-		// solve the system of equations and find the offset
-		return (settings.maxValue * avgMeasuredMin - settings.minValue * avgMeasuredMax) / (avgMeasuredMax - avgMeasuredMin);
+		// solve the system of equations and find the bias
+		return (settings.maxValue * avgMeasuredMin - settings.minValue * avgMeasuredMax) / (settings.maxValue - settings.minValue);
+	}
+
+	// If the target value is known, we can estimate the PID offset value based on the model gain and bias.
+	float getPidOffset(ModelOpenLoopPlant *model) const {
+		if (settings.targetValue == 0.0)
+			return 0;
+		return (settings.targetValue - modelBias) / model->getParams()[PARAM_K];
 	}
 
 	// See: Rangaiah G.P., Krishnaswamy P.R. Estimating Second-Order plus Dead Time Model Parameters, 1994.
@@ -353,21 +357,27 @@ public:
 
 	// Use automatic LM-solver to find the best PID coefs which satisfy the minimal PID metric.
 	// The initial PID coefs are already calculated using the well-known CHR method (1st or 2nd order).
-	bool solveModel(PidTuneMethod method, ModelAutoSolver & model) {
+	bool solveModel(pid_tune_method_e method, ModelAutoSolver & model) {
+		double merit0, merit;
+		
+#ifdef PID_DEBUG
+		printf("* Solving for better coefs:\r\n");
+#endif
 		// todo: is it correct?
 		double dTime = 1.0 / settings.timeScale;
 		const int numSimPoints = 1024;
-		PidSimulatorFactory<numSimPoints> simFactory(getMethodOrder(method), getAvgMeasuredMin(), getAvgMeasuredMax(), dTime, pid);
+		PidSimulatorFactory<numSimPoints> simFactory(simType, getMethodOrder(method), getAvgMeasuredMin(), getAvgMeasuredMax(), dTime, modelBias, pid);
 		PidCoefsFinderFunction<numSimPoints> func(&simFactory, params);
+		func.justifyParams(model.getParams());
+		merit0 = func.calcMerit(model.getParams());
 
 		// now hopefully we'll find even better coefs!
 		LevenbergMarquardtSolver<numParamsForPid> solver((LMSFunction<numParamsForPid> *)&func, model.getParams());
 		int iterationCount = solver.solve();
+		
+		merit = func.calcMerit(model.getParams());
 #ifdef PID_DEBUG
-		if (iterationCount > 0)
-			printf("* The solver finished in %d iterations!\r\n", iterationCount);
-		else
-			printf("* The solver aborted after %d iterations!\r\n", -iterationCount);
+		printSolverResult(iterationCount, merit0, merit);
 #endif
 		return true;
 	}
@@ -383,13 +393,23 @@ public:
 #endif
 	}
 
+	void printSolverResult(int iterationCount, double merit0, double merit) {
+		if (iterationCount > 0)
+			printf("* The solver finished in %d iterations! (Merit: %g -> %g)\r\n", iterationCount, merit0, merit);
+		else
+			printf("* The solver aborted after %d iterations! (Merit: %g -> %g)\r\n", -iterationCount, merit0, merit);
+	}
+
+
 protected:
 	AveragingDataBuffer<MAX_DATA_POINTS> measuredData;
 	PidAutoTuneSettings settings;
+	pid_sim_type_e simType;
 	double params[4] = { 0 };
 	pid_s pid;
 	pid_s pid0;	// not-optimized
 	int iterationCount = 0;
 	double avgMeasuredMin, avgMeasuredMax;
+	double modelBias;
 };
 

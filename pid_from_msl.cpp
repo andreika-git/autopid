@@ -28,7 +28,7 @@ public:
 
 		std::string str;
 		for (int i = 0; std::getline(fp, str); i++) {
-			// data starts at 4th line
+			// data starts on the 4th line
 			if (i < 4)
 				continue;
 			parseLine(str, startTime, endTime, inputIdx, outputIdx);
@@ -67,10 +67,6 @@ public:
 				}
 				curIdx++;
 			} else if (j == outputIdx) {
-				/*const float alpha = 0.5f;
-				float fv = alpha * prevV + (1.0f - alpha) * (float)v;
-				prevV = v;
-				data.push_back(fv);*/
 				data.push_back((float)v);
 				if (curIdx >= 0 && settings.stepPoint < 0) {
 					// calculate averaged level to determine the acceptable noise level
@@ -118,6 +114,28 @@ public:
 	double averagedMin = 0;
 };
 
+const char *getMethodName(pid_tune_method_e method) {
+	switch (method) {
+	case PID_TUNE_CHR1: return "CHR1";
+	case PID_TUNE_AUTO1: return "AUTO1";
+	case PID_TUNE_IMC2_1: return "IMC2_1";
+	case PID_TUNE_CHR2_1: return "CHR2_1";
+	case PID_TUNE_CHR2: return "CHR2";
+	case PID_TUNE_VDG2: return "VDG2";
+	case PID_TUNE_HP2: return "HP2";
+	case PID_TUNE_AUTO2: return "AUTO2";
+	}
+	return "(N/A)";
+}
+
+const char *getSimTypeName(pid_sim_type_e simType) {
+	switch (simType) {
+	case PID_SIM_REGULATOR: return "Regulator";
+	case PID_SIM_SERVO: return "Servo";
+	}
+	return "(N/A)";
+}
+
 #if 1
 int main(int argc, char **argv) {
 	if (argc < 6) {
@@ -126,32 +144,40 @@ int main(int argc, char **argv) {
 	}
 	
 	printf("PID_FROM_MSL - find PID controller coefficients based on a measured step response in a rusEFI log file.\r\n");
-	printf("Version 0.1 (c) andreika, 2019\r\n\r\n");
+	printf("Version 0.2 (c) andreika, 2019\r\n\r\n");
 	printf("Reading file %s...\r\n", argv[1]);
 	
 	MslData data;
 	if (!data.readMsl(argv[1], atof(argv[2]), atof(argv[3]), atoi(argv[4]), atoi(argv[5]))) {
+		printf("Usage: PID_FROM_MSL <file.msl> <startTime> <endTime> <inColumnIdx> <outColumnIdx> [<targetValue>]\r\n");
 		return -2;
 	}
 
-	printf("Measuring Settings: minValue=%g maxValue=%g stepPoint=%g maxPoint=%g numPoints=%d timeScale=%g\r\n",
-		data.settings.minValue, data.settings.maxValue, data.settings.stepPoint, data.settings.maxPoint, data.data.size(), data.settings.timeScale);
+	// Target value is optional, for PID_SIM_REGULATOR only
+	data.settings.targetValue = (argc > 6) ? atof(argv[6]) : 0.0;
+
+	printf("Measuring Settings: targetValue=%g minValue=%g maxValue=%g stepPoint=%g maxPoint=%g numPoints=%d timeScale=%g\r\n",
+		data.settings.targetValue, data.settings.minValue, data.settings.maxValue,
+		data.settings.stepPoint, data.settings.maxPoint, data.data.size(), data.settings.timeScale);
 
 	PidAutoTune chr1, chr2;
-
+	static const int numPids = 2;
+	PidAutoTune *chr[numPids] = { &chr1, &chr2 };
+	
 	for (size_t i = 0; i < data.data.size(); i++) {
-		chr1.addData(data.data[i]);
-		chr2.addData(data.data[i]);
+		for (int j = 0; j < numPids; j++) {
+			chr[j]->addData(data.data[i]);
+		}
 	}
 
 	// todo: more flexible method chooser
-	PidTuneMethod method = PID_TUNE_AUTO1;
-	printf("\r\nTrying method Auto1:\r\n");
-	chr1.findPid(method, data.settings, nullptr);
+	pid_sim_type_e simTypes[numPids] = { PID_SIM_REGULATOR, PID_SIM_REGULATOR };
+	pid_tune_method_e methods[numPids] = { PID_TUNE_AUTO1, PID_TUNE_AUTO2 };
 	
-	method = PID_TUNE_AUTO2;
-	printf("\r\nTrying method Auto2:\r\n");
-	chr2.findPid(method, data.settings, nullptr);
+	for (int k = 0; k < numPids; k++) {
+		printf("\r\n%d) Trying method %s on \"%s\" PID model:\r\n", k + 1, getMethodName(methods[k]), getSimTypeName(simTypes[k]));
+		chr[k]->findPid(simTypes[k], methods[k], data.settings, nullptr);
+	}
 
 	printf("Done!\r\n");
 
@@ -159,22 +185,34 @@ int main(int argc, char **argv) {
 	double dTime = 1.0 / data.settings.timeScale;
 	const int numSimPoints = 1024;
 
-	PidAutoTune *chr[2] = { &chr1, &chr2 };
+	pid_s bestPid;
+	double smallestItae = DBL_MAX;
 	for (int k = 0; k < 2; k++) {
 		const double *p = chr[k]->getParams();
 		printf("Model-%d Params: K=%g T1=%g T2=%g L=%g\r\n", (k + 1), p[PARAM_K], p[PARAM_T], p[PARAM_T2], p[PARAM_L]);
-		const pid_s pid0 = chr[k]->getPid0();
-		const pid_s pid = chr[k]->getPid();
-		printf("  PID0: P=%.8f I=%.8f D=%.8f offset=%.8f\r\n", pid0.pFactor, pid0.iFactor, pid0.dFactor, pid0.offset);
 
-		PidSimulator<numSimPoints> sim(chr[k]->getMethodOrder(method), chr[k]->getAvgMeasuredMin(), chr[k]->getAvgMeasuredMax(), dTime, true);
-		PidAccuracyMetric metric0 = sim.simulate(numSimPoints, pid0, p);
-		printf("  Metric0 result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric0.getItae(), metric0.getIse(), metric0.getMaxOvershoot() * 100.0);
+		pid_s pid[2] = { chr[k]->getPid0(), chr[k]->getPid() };
+		for (int j = 0; j < 2; j++) {
 
-		printf("  PID:  P=%.8f I=%.8f D=%.8f offset=%.8f\r\n", pid.pFactor, pid.iFactor, pid.dFactor, pid.offset);
-		PidAccuracyMetric metric = sim.simulate(numSimPoints, pid, p);
-		printf("  Metric result:  ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
+			const char *csvName = (j == 0) ? ((k == 0) ? "pid_test01.csv" : "pid_test02.csv") : ((k == 0) ? "pid_test1.csv" : "pid_test2.csv");
+			
+			PidSimulator<numSimPoints> sim1(simTypes[k], chr[k]->getMethodOrder(methods[k]),
+					chr[k]->getAvgMeasuredMin(), chr[k]->getAvgMeasuredMax(), dTime, chr[k]->getModelBias(), csvName);
+
+			PidAccuracyMetric metric = sim1.simulate(numSimPoints, pid[j], p);
+			
+			printf("  PID%d: P=%.8f I=%.8f D=%.8f offset=%.8f period=%.8fms\r\n", j, pid[j].pFactor, pid[j].iFactor, pid[j].dFactor, pid[j].offset,
+				pid[j].periodMs);
+			printf("  Metric%d result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", j, metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
+
+			if (metric.getItae() < smallestItae) {
+				smallestItae = metric.getItae();
+				bestPid = pid[j];
+			}
+		}
 	}
+
+	printf("The best PID: P=%.8f I=%.8f D=%.8f offset=%.1f period=%.1fms\r\n", bestPid.pFactor, bestPid.iFactor, bestPid.dFactor, bestPid.offset, bestPid.periodMs);
 
 	return 0;
 }

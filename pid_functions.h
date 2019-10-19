@@ -37,11 +37,12 @@ enum {
 const int numParamsForPid = 3;
 
 // the limit used for K and L params
-static const double minParamKL = 0.00001;
+static const double minParamK = 0.001;
+static const double minParamL = 0.1;
 
 // T (or T2) has a separate limit, because exp(-1/T) is zero for small T values 
 // (and we need to compare between them to find a direction for optimization method).
-static const double minParamT0 = 0.0001, minParamT1 = 0.01;
+static const double minParamT = 0.01;
 
 class InputFunction {
 public:
@@ -65,8 +66,8 @@ protected:
 class StepFunction : public InputFunction
 {
 public:
-	StepFunction(double minValue_, double maxValue_, double offset_, double stepPoint_, double timeScale_) :
-				minValue(minValue_), maxValue(maxValue_), offset(offset_), stepPoint(stepPoint_), InputFunction(timeScale_) {
+	StepFunction(double minValue_, double maxValue_, double stepPoint_, double timeScale_) :
+				minValue(minValue_), maxValue(maxValue_), stepPoint(stepPoint_), InputFunction(timeScale_) {
 	}
 
 	virtual double getValue(double i, double d) const {
@@ -80,9 +81,9 @@ public:
 		double vNear = (I < stepPoint) ? minValue : maxValue;
 		double vFar = (I + 1 < stepPoint) ? minValue : maxValue;
 		// interpolate
-		return offset + vFar * fract + vNear * (1.0f - fract);
+		return vFar * fract + vNear * (1.0f - fract);
 #else
-		return offset + ((id < stepPoint) ? minValue : maxValue);
+		return ((id < stepPoint) ? minValue : maxValue);
 #endif
 	}
 
@@ -90,8 +91,6 @@ private:
 	double minValue, maxValue;
 	// stepPoint is float because we have AveragingDataBuffer, and the time axis may be scaled
 	double stepPoint;
-	// needed to use PARAM_K coefficient properly; also offset is used by PID
-	double offset;
 };
 
 template <int numPoints>
@@ -123,11 +122,11 @@ private:
 template <int numParams>
 class AbstractDelayLineFunction : public LMSFunction<numParams> {
 public:
-	AbstractDelayLineFunction(const InputFunction *input, const float *measuredOutput, int numDataPoints, double minParamT) {
+	AbstractDelayLineFunction(const InputFunction *input, const float *measuredOutput, int numDataPoints, double modelBias) {
 		dataPoints = measuredOutput;
 		inputFunc = input;
 		numPoints = numDataPoints;
-		this->minParamT = minParamT;
+		this->modelBias = modelBias;
 	}
 
 	virtual double getResidual(int i, const double *params) const {
@@ -149,7 +148,8 @@ protected:
 	const InputFunction *inputFunc;
 	const float *dataPoints;
 	int numPoints;
-	double minParamT;
+	// needed to match the "ideal" curve and the real plant data; it doesn't affect the params but helps to fit the curve.
+	double modelBias;
 };
 
 // FODPT indirect transfer function used for step response analytic simulation.
@@ -157,22 +157,22 @@ protected:
 // The Laplace representation is: K * exp(-L*s) / (T*s + 1)
 class FirstOrderPlusDelayLineFunction : public AbstractDelayLineFunction<3> {
 public:
-	FirstOrderPlusDelayLineFunction(const InputFunction *input, const float *measuredOutput, int numDataPoints, double minParamT) :
-		AbstractDelayLineFunction(input, measuredOutput, numDataPoints, minParamT) {
+	FirstOrderPlusDelayLineFunction(const InputFunction *input, const float *measuredOutput, int numDataPoints, double modelBias) :
+		AbstractDelayLineFunction(input, measuredOutput, numDataPoints, modelBias) {
 	}
 
 	virtual void justifyParams(double *params) const {
-		params[PARAM_L] = fmax(params[PARAM_L], minParamKL);
+		params[PARAM_L] = fmax(params[PARAM_L], minParamL);
 		params[PARAM_T] = fmax(params[PARAM_T], minParamT);
-		params[PARAM_K] = (fabs(params[PARAM_K]) < minParamKL) ? minParamKL : params[PARAM_K];
+		params[PARAM_K] = (fabs(params[PARAM_K]) < minParamK) ? minParamK : params[PARAM_K];
 	}
 
 	// Creating a state-space representation using Rosenbrock system matrix
 	virtual double getEstimatedValueAtPoint(int i, const double *params) const {
 		// only positive values allowed (todo: choose the limits)
-		double pL = fmax(params[PARAM_L], minParamKL);
+		double pL = fmax(params[PARAM_L], minParamL);
 		double pT = fmax(params[PARAM_T], minParamT);
-		double pK = (fabs(params[PARAM_K]) < minParamKL) ? minParamKL : params[PARAM_K];
+		double pK = (fabs(params[PARAM_K]) < minParamK) ? minParamK : params[PARAM_K];
 
 		// state-space params
 		double lambda = exp(-1.0 / (pT * inputFunc->getTimeScale()));
@@ -188,7 +188,9 @@ public:
 			// indirect model response in Controllable Canonical Form (1st order CCF)
 			y = lambda * y + pK * (1.0 - lambda) * inp;
 		}
-		return y;
+		
+		// the output can be biased
+		return y + modelBias;
 	}
 };
 
@@ -198,24 +200,24 @@ public:
 // The Laplace representation is: K * exp(-L * s) / ((T1*T2)*s^2 + (T1+T2)*s + 1)
 class SecondOrderPlusDelayLineOverdampedFunction : public AbstractDelayLineFunction<4> {
 public:
-	SecondOrderPlusDelayLineOverdampedFunction(const InputFunction *input, const float *measuredOutput, int numDataPoints, double minParamT) :
-		AbstractDelayLineFunction(input, measuredOutput, numDataPoints, minParamT) {
+	SecondOrderPlusDelayLineOverdampedFunction(const InputFunction *input, const float *measuredOutput, int numDataPoints, double modelBias) :
+		AbstractDelayLineFunction(input, measuredOutput, numDataPoints, modelBias) {
 	}
 
 	virtual void justifyParams(double *params) const {
-		params[PARAM_L] = fmax(params[PARAM_L], minParamKL);
+		params[PARAM_L] = fmax(params[PARAM_L], minParamL);
 		params[PARAM_T] = fmax(params[PARAM_T], minParamT);
 		params[PARAM_T2] = fmax(params[PARAM_T2], minParamT);
-		params[PARAM_K] = (fabs(params[PARAM_K]) < minParamKL) ? minParamKL : params[PARAM_K];
+		params[PARAM_K] = (fabs(params[PARAM_K]) < minParamK) ? minParamK : params[PARAM_K];
 	}
 
 	// Creating a state-space representation using Rosenbrock system matrix
 	virtual double getEstimatedValueAtPoint(int i, const double *params) const {
 		// only positive values allowed (todo: choose the limits)
-		double pL = fmax(params[PARAM_L], minParamKL);
+		double pL = fmax(params[PARAM_L], minParamL);
 		double pT = fmax(params[PARAM_T], minParamT);
 		double pT2 = fmax(params[PARAM_T2], minParamT);
-		double pK = (fabs(params[PARAM_K]) < minParamKL) ? minParamKL : params[PARAM_K];
+		double pK = (fabs(params[PARAM_K]) < minParamK) ? minParamK : params[PARAM_K];
 
 		// state-space params
 		double lambda = exp(-1.0 / (pT * inputFunc->getTimeScale()));
@@ -234,7 +236,9 @@ public:
 			y = lambda2 * y + (1.0 - lambda2) * x;
 			x = lambda * x + pK * (1.0 - lambda) * inp;
 		}
-		return y;
+		
+		// the output can be biased
+		return y + modelBias;
 	}
 };
 

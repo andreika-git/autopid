@@ -13,13 +13,17 @@
 #include "global.h"
 
 
+typedef enum {
+	PID_SIM_REGULATOR = 0,	// imitate load disturbance
+	PID_SIM_SERVO,	// imitate setpoint change
+} pid_sim_type_e;
 
 template <int maxPoints>
 class PidSimulator {
 public:
-	PidSimulator(int order, double target1_, double target2_, double dTime_, bool showOutput_) : 
-		target1(target1_), target2(target2_), dTime(dTime_), methodOrder(order), showOutput(showOutput_),
-		plantInput(1.0 / dTime_), plant1(&plantInput, nullptr, 0, minParamT0), plant2(&plantInput, nullptr, 0, minParamT0) {
+	PidSimulator(pid_sim_type_e simType_, int order, double target1_, double target2_, double dTime_, double modelBias, const char *outputFile_) :
+		simType(simType_), target1(target1_), target2(target2_), dTime(dTime_), methodOrder(order), outputFile(outputFile_),
+		plantInput(1.0 / dTime_), plant1(&plantInput, nullptr, 0, modelBias), plant2(&plantInput, nullptr, 0, modelBias) {
 	}
 
 	PidAccuracyMetric simulate(int numPoints, const pid_s & pidParams, const double *params) {
@@ -34,44 +38,73 @@ public:
 
 		plantInput.reset();
 		// guess a previous state to minimize the system "shock"
-		plantInput.addDataPoint((float)(getTarget(0) / params[PARAM_K]) - pidParams.offset);
+		plantInput.addDataPoint((float)(getSetpoint(0) / params[PARAM_K]) - pidParams.offset);
 		// "calm down" the PID controller to avoid huge spikes at the beginning
-		pid.getOutput(getTarget(0), plant->getEstimatedValueAtPoint(0, params), dTime);
+		pid.getOutput(getSetpoint(0), plant->getEstimatedValueAtPoint(0, params), dTime);
+
+		stepPoint = maxPoints / 2;
 
 		metric.reset();
 
 		// simulate over time
 		for (int i = 0; i < numPoints; i++) {
 			// make a step in the middle
-			double target = getTarget(i);
+			double target = getSetpoint(i);
 			// "measure" the current value of the plant
-			double pidInput = plant->getEstimatedValueAtPoint(i, params);
+			double pidInput = plant->getEstimatedValueAtPoint(i, params) + getLoadDisturbance(i);
 			// wait for the controller reaction
 			double pidOutput = pid.getOutput(target, pidInput, dTime);
+
 			// apply the reaction to the plant's pidInput
 			plantInput.addDataPoint((float)pidOutput);
-			metric.addPoint((double)i / (double)numPoints, pidInput, target);
+			// don't take into account any start-up transients, we're interested only in our step response!
+			if (i >= stepPoint)
+				metric.addPoint((double)i / (double)numPoints, pidInput, target);
 #ifdef PID_DEBUG
-			if (showOutput)
-				output_csv((methodOrder == 1) ? "pid_test.csv" : "pid_test2.csv", (double)i, pidInput, pidOutput, target);
+			if (outputFile != nullptr)
+				output_csv(outputFile, (double)i, pidOutput, target, pidInput);
 #endif
 		}
 
 		return metric;
 	}
 
-	double getTarget(int i) const {
-		return (i > maxPoints / 2) ? target2 : target1;
+	double getSetpoint(int i) const {
+		switch (simType) {
+		case PID_SIM_SERVO:
+			return (i > stepPoint) ? target2 : target1;
+		default:
+			// we want to be in the middle for safety
+			return (target1 + target2) / 2.0;
+		}
+	}
+
+	double getLoadDisturbance(int i) const {
+		static const double disturb = 0.10;
+		static const double ampl = 0.25, period = 0.37;
+		double d = 0;
+		switch (simType) {
+		case PID_SIM_REGULATOR:
+			// add or subtract 10% to imitate the "load"
+			d += target1 * ((i > stepPoint) ? -disturb : disturb);
+			// add periodic noise
+			d += sin(2.0 * 3.14159265 * (double)i * dTime / period) * ampl;
+			return d;
+		default:
+			return 0.0;
+		}
 	}
 
 protected:
 	int methodOrder;
-	bool showOutput;
+	int stepPoint;
+	const char *outputFile;
 	StoredDataInputFunction<maxPoints> plantInput;
 	FirstOrderPlusDelayLineFunction plant1;
 	SecondOrderPlusDelayLineOverdampedFunction plant2;
 	PidAccuracyMetric metric;
 	double target1, target2, dTime;
+	pid_sim_type_e simType;
 };
 
 
@@ -81,8 +114,8 @@ protected:
 template <int numPoints>
 class PidSimulatorFactory {
 public:
-	PidSimulatorFactory(int methodOrder_, double target1_, double target2_, double dTime, const pid_s & pid_) :
-		sim(methodOrder_, target1_, target2_, dTime, false), pid(pid_) {
+	PidSimulatorFactory(pid_sim_type_e simType, int methodOrder_, double target1_, double target2_, double dTime, double modelBias, const pid_s & pid_) :
+		sim(simType, methodOrder_, target1_, target2_, dTime, modelBias, nullptr), pid(pid_) {
 	}
 
 public:
@@ -115,7 +148,7 @@ public:
 	}
 
 	virtual double getResidual(int i, const double *params) const {
-		return simFactory->sim.getTarget(i) - getEstimatedValueAtPoint(i, params);
+		return simFactory->sim.getSetpoint(i) - getEstimatedValueAtPoint(i, params);
 	}
 
 	virtual double getEstimatedValueAtPoint(int i, const double *params) const {

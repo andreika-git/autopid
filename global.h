@@ -4,6 +4,7 @@
 
 
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@ struct pid_s {
 	float iFactor;
 	float dFactor;
 	float offset;
+	float periodMs;
 
 	int16_t minValue;
 	int16_t maxValue;

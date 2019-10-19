@@ -29,8 +29,8 @@ TEST(pidAutoTune, testMeasuredDataBuffer) {
 }
 
 TEST(pidAutoTune, testFOPDT) {
-	StepFunction stepFunc(0, 100, 0, 10, 1.0);
-	FirstOrderPlusDelayLineFunction func(&stepFunc, nullptr, 0, minParamT0);
+	StepFunction stepFunc(0, 100, 10, 1.0);
+	FirstOrderPlusDelayLineFunction func(&stepFunc, nullptr, 0, 0.0);
 	double params[3];
 	params[PARAM_K] = 2.0;
 	params[PARAM_T] = 3.0;
@@ -41,8 +41,8 @@ TEST(pidAutoTune, testFOPDT) {
 }
 
 TEST(pidAutoTune, testSOPDTOverdamped) {
-	StepFunction stepFunc(0, 100, 0, 10, 1.0);
-	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0, minParamT0);
+	StepFunction stepFunc(0, 100, 10, 1.0);
+	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0, 0.0);
 	double params[4];
 	params[PARAM_K] = 2.0;
 	params[PARAM_T] = 3.0;
@@ -58,8 +58,8 @@ static const float outputData[] = { 13.29, 13.29, 13.33, 13.33, 13.33, 13.33, 13
 const int numData = sizeof(outputData) / sizeof(outputData[0]);
 
 void printSOPDT() {
-	StepFunction stepFunc(20.0, 30.0, 32.823277, 178, 1.0);
-	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0, minParamT0);
+	StepFunction stepFunc(20.0, 30.0, 178, 1.0);
+	SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, nullptr, 0, 0.0);
 	double params[4];
 	params[PARAM_K] = 0.251778;
 	params[PARAM_T] = 55.7078;
@@ -82,24 +82,18 @@ TEST(pidAutoTune, chsSopdtPid) {
 	params0[PARAM_T2] = 1;
 	params0[PARAM_L] = 1;
 
-	for (int tries = 0; tries < 10; tries ++) {
-		for (int i = 0; i < numData; i++) {
-			chr.addData(outputData[i]);
-		}
-
-		PidAutoTuneSettings settings;
-		settings.minValue = 20.0;
-		settings.maxValue = 30.0;
-		settings.stepPoint = 178;	// todo: adjust for the buffer scale
-		settings.maxPoint = 460;
-		settings.timeScale = 1.0;
-		if (chr.findPid(PID_TUNE_CHR2, settings, params0))
-			break;
-		// todo: the solver has failed. Choose other initial params?
-		// params0[0] = ; params0[1] = ; params0[2] = ;
-		break;
+	for (int i = 0; i < numData; i++) {
+		chr.addData(outputData[i]);
 	}
 
+	PidAutoTuneSettings settings;
+	settings.minValue = 20.0;
+	settings.maxValue = 30.0;
+	settings.stepPoint = 178;	// todo: adjust for the buffer scale
+	settings.maxPoint = 460;
+	settings.timeScale = 1.0;
+	bool ret = chr.findPid(PID_SIM_SERVO, PID_TUNE_CHR2, settings, params0);
+	
 #ifdef PID_DEBUG
 	const double *p = chr.getParams();
 	printf("Params: K=%g T1=%g T2=%g L=%g\r\n", p[PARAM_K], p[PARAM_T], p[PARAM_T2], p[PARAM_L]);
@@ -128,7 +122,7 @@ TEST(pidAutoTune, testPidCoefs) {
 	// todo: is it correct?
 	double dTime = 1;
 	const int numSimPoints = 2048;
-	PidSimulator<numSimPoints> sim(2, 13.0, 14.0, dTime, true);
+	PidSimulator<numSimPoints> sim(PID_SIM_SERVO, 2, 13.0, 14.0, dTime, 0.0, nullptr);
 	for (int idx = 0; idx <= 4; idx++) {
 		PidAccuracyMetric metric = sim.simulate(numSimPoints, pidParams[idx], params);
 #ifdef PID_DEBUG
@@ -137,6 +131,48 @@ TEST(pidAutoTune, testPidCoefs) {
 	}
 
 	// todo: check results
+}
+
+TEST(pidAutoTune, testPidSim) {
+	const int numSimPoints = 1024;
+	
+	pid_s pid;
+	//double p[4] = { 0.27659, 1.08301, 0.3,  1.08 };
+#if 1
+	double p[4] = { 0.276267, 0.596307, 0.1, 0.140311 };
+	double modelBias = 7.88121;
+	pid.pFactor = 18.07646561;
+	pid.iFactor = 16.68941116;
+	pid.dFactor = 0.00180748;
+	pid.offset = 21.4;
+#endif
+
+#if 0
+	double p[4] = { 0.276267, 0.596307, 0.1, 0.140311 };
+	double modelBias = 7.88121;
+	pid.pFactor = 12.17391205;
+	pid.iFactor = 11.22539520;
+	pid.dFactor = 2.99444199;
+	pid.offset = 28.50101471;
+	//pid.offset = 21.4;
+#endif
+
+#if 0
+	double p[4] = { 0.276267, 0.596307, 0.1, 0.140311 };
+	double modelBias = 7.88121;
+	pid.pFactor = 19.52591324;
+	pid.iFactor = 14.07089329;
+	pid.dFactor = 1.58994818;
+	pid.offset = 21.4;
+#endif
+	pid.periodMs = 11;
+	pid.minValue = 10;
+	pid.maxValue = 90;
+
+	PidSimulator<numSimPoints> sim(PID_SIM_REGULATOR, 2, 13.4117, 16.1769, pid.periodMs / 1000.0, modelBias, "pid_test.csv");
+	printf("  PID:  P=%.8f I=%.8f D=%.8f offset=%.8f period=%.8fms\r\n", pid.pFactor, pid.iFactor, pid.dFactor, pid.offset, pid.periodMs);
+	PidAccuracyMetric metric = sim.simulate(numSimPoints, pid, p);
+	printf("  Metric result:  ITAE=%g ISE=%g Overshoot=%g%%\r\n", metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
 }
 
 #if 0
@@ -154,7 +190,7 @@ GTEST_API_ int main(int argc, char **argv) {
 	testSOPDTOverdamped();
 	testChsSopdtPid();
 #endif	
-	::testing::GTEST_FLAG(filter) = "*testPidCoefs*";
+	::testing::GTEST_FLAG(filter) = "*testPidSim*";
 	int result = RUN_ALL_TESTS();
 	// windows ERRORLEVEL in Jenkins batch file seems to want negative value to detect failure
 	return result == 0 ? 0 : -1;

@@ -19,7 +19,7 @@
 // should be multiple of 2
 #define MAX_DATA_POINTS 700
 
-enum PidTuneMethod {
+typedef enum {
 	// 1st order
 	PID_TUNE_CHR1,
 	PID_TUNE_AUTO1,
@@ -31,7 +31,7 @@ enum PidTuneMethod {
 	PID_TUNE_VDG2,
 	PID_TUNE_HP2,
 	PID_TUNE_AUTO2,
-};
+} pid_tune_method_e;
 
 // Used as an open-loop plant model for the "manual bump test" and as an input of a transfer function
 class ModelOpenLoopPlant
@@ -84,10 +84,55 @@ private:
 	double p[3];
 };
 
-// Chien-Hrones-Reswick PID implementation for the 1st order model
-class ModelChienHronesReswickFirstOrder : public ModelOpenLoopPlant {
+// Standard PID model: Kc * (1 + 1/(Ti*S) + Td * S)
+// This class converts in into our "Parallel" form: Kp + Ki / S + Kd * S
+class ModelStandard : public ModelOpenLoopPlant {
+public:
+	ModelStandard(const double *params_) : ModelOpenLoopPlant(params_) {
+	}
+
+	virtual float getKp() const {
+		return (float)Kc;
+	}
+	virtual float getKi() const {
+		return (float)(Kc / Ti);
+	}
+	virtual float getKd() const {
+		return (float)(Kc * Td);
+	}
+
+protected:
+	// "Standard" PID coefs
+	double Kc, Ti, Td;
+};
+
+class ModelStandardIMC : public ModelStandard {
+public:
+	ModelStandardIMC(const double *params_) : ModelStandard(params_) {
+		lambda = fmax(0.25 * params[PARAM_L], 0.2 * Ti);
+	}
+
+protected:
+	// closed-loop speed of response
+	double lambda;
+};
+
+
+// Chien-Hrones-Reswick PID implementation for the 1st order model (generic model).
+class ModelChienHronesReswickFirstOrder : public ModelStandardIMC {
+public:
+	ModelChienHronesReswickFirstOrder(const double *params_) : ModelStandardIMC(params_) {
+		double l2 = params[PARAM_L] / 2.0;
+		Ti = params[PARAM_T] + l2;
+		Td = params[PARAM_T] * params[PARAM_L] / (2 * params[PARAM_T] + params[PARAM_L]);
+		Kc = Ti / (params[PARAM_K] * (lambda + l2));
+	}
+};
+
+// Chien-Hrones-Reswick PID implementation for the 1st order model (set-point regulation).
+class ModelChienHronesReswickFirstOrderSetpoint : public ModelOpenLoopPlant {
 public:	
-	ModelChienHronesReswickFirstOrder(const double *params_) : ModelOpenLoopPlant(params_) {
+	ModelChienHronesReswickFirstOrderSetpoint(const double *params_) : ModelOpenLoopPlant(params_) {
 	}
 
 	virtual float getKp() const {
@@ -101,91 +146,62 @@ public:
 	}
 };
 
+// Chien-Hrones-Reswick PID implementation for the 1st order model (disturbance rejection).
+class ModelChienHronesReswickFirstOrderDisturbance : public ModelOpenLoopPlant {
+public:
+	ModelChienHronesReswickFirstOrderDisturbance(const double *params_) : ModelOpenLoopPlant(params_) {
+	}
+
+	virtual float getKp() const {
+		return (float)(0.95f / params[PARAM_K]);
+	}
+	virtual float getKi() const {
+		return (float)(2.4f / params[PARAM_T]);
+	}
+	virtual float getKd() const {
+		return (float)(1.0f / (0.42f * params[PARAM_L]));
+	}
+};
+
 // "IMC-PID" Rivera-Morari-Zafiriou implementation for the 1st order model
 // See "Panda R.C., Yu C.C., Huang H.P. PID tuning rules for SOPDT systems: Review and some new results"
-class ModelImcPidFirstOrder : public ModelOpenLoopPlant {
+class ModelRiveraMorariFirstOrder : public ModelStandardIMC {
 public:
-	ModelImcPidFirstOrder(const double *params_) : ModelOpenLoopPlant(params_) {
-		lambda = fmax(0.25 * params[PARAM_L], 0.2 * params[PARAM_T]);
+	ModelRiveraMorariFirstOrder(const double *params_) : ModelStandardIMC(params_) {
 		Kc = (2 * params[PARAM_T] + params[PARAM_L]) / (2 * params[PARAM_K] * (lambda + params[PARAM_L]));
 		Ti = params[PARAM_T] + 0.5 * params[PARAM_L];
 		Td = params[PARAM_T] * params[PARAM_L] / (2.0 * params[PARAM_T] + params[PARAM_L]);
 	}
-
-	virtual float getKp() const {
-		return (float)Kc;
-	}
-	virtual float getKi() const {
-		return (float)(Kc / Ti);
-	}
-	virtual float getKd() const {
-		return (float)(Kc * Td);
-	}
-
-private:
-	double lambda;
-	double Kc, Ti, Td;
 };
 
-// Based on "IMC-Chien" model: "Chien, I.L., IMC-PID controller design - An extension."
+// Based on "IMC-Chien" (aka Rivera/Smith) model: "Chien, I.L., IMC-PID controller design - An extension."
 // "Proceedings of the IFAC adaptive control of chemical processes conference, Copenhagen, Denmark, 1988, pp. 147-152."
-class ModelChienHronesReswickSecondOrder : public ModelOpenLoopPlant {
+class ModelChienHronesReswickSecondOrder : public ModelStandardIMC {
 public:
-	ModelChienHronesReswickSecondOrder(const double *params_) : ModelOpenLoopPlant(params_) {
+	ModelChienHronesReswickSecondOrder(const double *params_) : ModelStandardIMC(params_) {
 		Ti = params[PARAM_T] + params[PARAM_T2];
 		Td = params[PARAM_T] * params[PARAM_T2] / Ti;
-		lamda = fmax(0.25 * params[PARAM_L], 0.2 * Ti);
-		Kc = Ti / (params[PARAM_K] * (lamda + params[PARAM_L]));
+		Kc = Ti / (params[PARAM_K] * (lambda + params[PARAM_L]));
 	}
-
-	virtual float getKp() const {
-		return (float)Kc;
-	}
-	virtual float getKi() const {
-		return (float)(Kc / Ti);
-	}
-	virtual float getKd() const {
-		return (float)(Kc * Td);
-	}
-
-protected:
-	// closed-loop speed of response
-	double lamda;
-	// "Standard" PID coefs
-	double Kc, Ti, Td;
 };
 
 // Basen on Van der Grinten Model (1963)
 // "Step disturbance".
-class ModelVanDerGrintenSecondOrder : public ModelOpenLoopPlant {
+class ModelVanDerGrintenSecondOrder : public ModelStandard {
 public:
-	ModelVanDerGrintenSecondOrder(const double *params_) : ModelOpenLoopPlant(params_) {
+	ModelVanDerGrintenSecondOrder(const double *params_) : ModelStandard(params_) {
 		double T12 = params[PARAM_T] + params[PARAM_T2];
 		Ti = T12 + 0.5 * params[PARAM_L];
 		Td = (T12 * params[PARAM_L] + 2.0 * params[PARAM_T] * params[PARAM_T2]) / (params[PARAM_L] + 2.0 * T12);
 		Kc = (0.5 + T12 / params[PARAM_L]) / params[PARAM_K];
 	}
-
-	virtual float getKp() const {
-		return (float)Kc;
-	}
-	virtual float getKi() const {
-		return (float)(Kc / Ti);
-	}
-	virtual float getKd() const {
-		return (float)(Kc * Td);
-	}
-
-protected:
-	double lamda;
-	double Kc, Ti, Td;
 };
 
 // Based on Haalman-Pemberton model: "Haalman, A.: Adjusting controllers for a deadtime process. Control Eng. 65, 71–73 (1965)"
 // Suited for overdamped response and significant delay.
-class ModelHaalmanPembertonSecondOrder : public ModelChienHronesReswickSecondOrder {
+class ModelHaalmanPembertonSecondOrder : public ModelStandard {
 public:
-	ModelHaalmanPembertonSecondOrder(const double *params_) : ModelChienHronesReswickSecondOrder(params_) {
+	ModelHaalmanPembertonSecondOrder(const double *params_) : ModelStandard(params_) {
 		double T1divT2 = params[PARAM_T] / params[PARAM_T2];
 		double LdivT2 = params[PARAM_L] / params[PARAM_T2];
 		Ti = params[PARAM_T] + params[PARAM_T2];
@@ -200,34 +216,20 @@ public:
 	}
 };
 
-#if 0
-// Based on "IMC-Rivera/Smith" model: 
-// "Proceedings of the IFAC adaptive control of chemical processes conference, Copenhagen, Denmark, 1988, pp. 147-152."
-class ModelRiveraSmithSecondOrder : public ModelOpenLoopPlant {
+// Based on IMC-Maclaurin model:
+// Lee, Y., Park, S., Lee, M., and Brosilow, C., PID controller tuning for desired closed - loop responses for SI / SO systems. AIChE J. 44, 106–115 1998.
+class ModelMaclaurinSecondOrder : public ModelStandardIMC {
 public:
-	ModelRiveraSmithSecondOrder(const double *params_) : ModelOpenLoopPlant(params_) {
-		Ti = params[PARAM_T] + params[PARAM_T2];
-		Td = params[PARAM_T] * params[PARAM_T2] / Ti;
-		lamda = fmax(0.25 * params[PARAM_L], 0.2 * Ti);
-		Kc = (params[PARAM_T] + params[PARAM_T2]) / (params[PARAM_K] * (lamda + params[PARAM_L]));
+	ModelMaclaurinSecondOrder(const double *params_) : ModelStandardIMC(params_) {
+		double T1T2 = params[PARAM_T] + params[PARAM_T2];
+		double L = params[PARAM_L];
+		double L2 = L * L;
+		double twolL = 2.0 * lambda + L;
+		Ti = T1T2 - (2.0 * lambda * lambda - L2) / (2.0 * twolL);
+		Kc = Ti / (params[PARAM_K] * twolL);
+		Td = Ti - T1T2 + (params[PARAM_T] * params[PARAM_T2] - L2 * L / (6.0 * twolL)) / Ti;
 	}
-
-	virtual float getKp() const {
-		//return (float)(Kc * (1.0 + Td / Ti));
-		return (float)Kc;
-	}
-	virtual float getKi() const {
-		return (float)(Kc / Ti);
-	}
-	virtual float getKd() const {
-		return (float)(Kc * Td);
-	}
-
-private:
-	double lamda;
-	double Kc, Ti, Td;
 };
-#endif
 
 class ModelAutoSolver : public ModelOpenLoopPlant {
 public:
