@@ -39,27 +39,27 @@ class ModelOpenLoopPlant
 public:
 	ModelOpenLoopPlant() {} 
 
-	ModelOpenLoopPlant(const double *params_) : params((double *)params_) {
+	ModelOpenLoopPlant(const double_t *params_) : params((double_t *)params_) {
 	}
 
-	double *getParams() {
+	double_t *getParams() {
 		return params;
 	}
 
-	virtual float getKp() const = 0;
-	virtual float getKi() const = 0;
-	virtual float getKd() const = 0;
+	virtual float_t getKp() const = 0;
+	virtual float_t getKi() const = 0;
+	virtual float_t getKd() const = 0;
 
 protected:
-	double *params;
+	double_t *params;
 };
 
 // Based on FOPDT model approximated from Overdamped-SOPDT model
 class ModelFopdtApproximatedFromSopdt : public ModelOpenLoopPlant {
 public:
-	ModelFopdtApproximatedFromSopdt(double *soParams) : ModelOpenLoopPlant(p) {
-		double T2divT1 = soParams[PARAM_T2] / soParams[PARAM_T];
-		double T2mulT1 = soParams[PARAM_T2] * soParams[PARAM_T];
+	ModelFopdtApproximatedFromSopdt(double_t *soParams) : ModelOpenLoopPlant(p) {
+		double_t T2divT1 = soParams[PARAM_T2] / soParams[PARAM_T];
+		double_t T2mulT1 = soParams[PARAM_T2] * soParams[PARAM_T];
 		params[PARAM_K] = soParams[PARAM_K];
 		params[PARAM_T] = 0.828 + 0.812 * T2divT1 + 0.172 * exp(-6.9 * T2divT1) * soParams[PARAM_T];
 		params[PARAM_L] = 1.116 * T2mulT1 / (soParams[PARAM_T] + 1.208 * soParams[PARAM_T2]) + soParams[PARAM_L];
@@ -69,60 +69,60 @@ public:
 	}
 
 	// we don't really need them, because this model is just an intermediate
-	virtual float getKp() const {
+	virtual float_t getKp() const {
 		return 0.0f;
 	}
-	virtual float getKi() const {
+	virtual float_t getKi() const {
 		return 0.0f;
 	}
-	virtual float getKd() const {
+	virtual float_t getKd() const {
 		return 0.0f;
 	}
 
 private:
 	// A storage for the new 1st order params
-	double p[3];
+	double_t p[3];
 };
 
 // Standard PID model: Kc * (1 + 1/(Ti*S) + Td * S)
 // This class converts in into our "Parallel" form: Kp + Ki / S + Kd * S
 class ModelStandard : public ModelOpenLoopPlant {
 public:
-	ModelStandard(const double *params_) : ModelOpenLoopPlant(params_) {
+	ModelStandard(const double_t *params_) : ModelOpenLoopPlant(params_) {
 	}
 
-	virtual float getKp() const {
-		return (float)Kc;
+	virtual float_t getKp() const {
+		return (float_t)Kc;
 	}
-	virtual float getKi() const {
-		return (float)(Kc / Ti);
+	virtual float_t getKi() const {
+		return (float_t)(Kc / Ti);
 	}
-	virtual float getKd() const {
-		return (float)(Kc * Td);
+	virtual float_t getKd() const {
+		return (float_t)(Kc * Td);
 	}
 
 protected:
 	// "Standard" PID coefs
-	double Kc, Ti, Td;
+	double_t Kc, Ti, Td;
 };
 
 class ModelStandardIMC : public ModelStandard {
 public:
-	ModelStandardIMC(const double *params_) : ModelStandard(params_) {
+	ModelStandardIMC(const double_t *params_) : ModelStandard(params_) {
 		lambda = fmax(0.25 * params[PARAM_L], 0.2 * Ti);
 	}
 
 protected:
 	// closed-loop speed of response
-	double lambda;
+	double_t lambda;
 };
 
 
 // Chien-Hrones-Reswick PID implementation for the 1st order model (generic model).
 class ModelChienHronesReswickFirstOrder : public ModelStandardIMC {
 public:
-	ModelChienHronesReswickFirstOrder(const double *params_) : ModelStandardIMC(params_) {
-		double l2 = params[PARAM_L] / 2.0;
+	ModelChienHronesReswickFirstOrder(const double_t *params_) : ModelStandardIMC(params_) {
+		double_t l2 = params[PARAM_L] / 2.0;
 		Ti = params[PARAM_T] + l2;
 		Td = params[PARAM_T] * params[PARAM_L] / (2 * params[PARAM_T] + params[PARAM_L]);
 		Kc = Ti / (params[PARAM_K] * (lambda + l2));
@@ -132,34 +132,34 @@ public:
 // Chien-Hrones-Reswick PID implementation for the 1st order model (set-point regulation).
 class ModelChienHronesReswickFirstOrderSetpoint : public ModelOpenLoopPlant {
 public:	
-	ModelChienHronesReswickFirstOrderSetpoint(const double *params_) : ModelOpenLoopPlant(params_) {
+	ModelChienHronesReswickFirstOrderSetpoint(const double_t *params_) : ModelOpenLoopPlant(params_) {
 	}
 
-	virtual float getKp() const {
-		return (float)(0.6f / params[PARAM_K]);
+	virtual float_t getKp() const {
+		return (float_t)(0.6f / params[PARAM_K]);
 	}
-	virtual float getKi() const {
-		return (float)(1.0f / params[PARAM_T]);
+	virtual float_t getKi() const {
+		return (float_t)(1.0f / params[PARAM_T]);
 	}
-	virtual float getKd() const {
-		return (float)(1.0f / (0.5f * params[PARAM_L]));
+	virtual float_t getKd() const {
+		return (float_t)(1.0f / (0.5f * params[PARAM_L]));
 	}
 };
 
 // Chien-Hrones-Reswick PID implementation for the 1st order model (disturbance rejection).
 class ModelChienHronesReswickFirstOrderDisturbance : public ModelOpenLoopPlant {
 public:
-	ModelChienHronesReswickFirstOrderDisturbance(const double *params_) : ModelOpenLoopPlant(params_) {
+	ModelChienHronesReswickFirstOrderDisturbance(const double_t *params_) : ModelOpenLoopPlant(params_) {
 	}
 
-	virtual float getKp() const {
-		return (float)(0.95f / params[PARAM_K]);
+	virtual float_t getKp() const {
+		return (float_t)(0.95f / params[PARAM_K]);
 	}
-	virtual float getKi() const {
-		return (float)(2.4f / params[PARAM_T]);
+	virtual float_t getKi() const {
+		return (float_t)(2.4f / params[PARAM_T]);
 	}
-	virtual float getKd() const {
-		return (float)(1.0f / (0.42f * params[PARAM_L]));
+	virtual float_t getKd() const {
+		return (float_t)(1.0f / (0.42f * params[PARAM_L]));
 	}
 };
 
@@ -167,7 +167,7 @@ public:
 // See "Panda R.C., Yu C.C., Huang H.P. PID tuning rules for SOPDT systems: Review and some new results"
 class ModelRiveraMorariFirstOrder : public ModelStandardIMC {
 public:
-	ModelRiveraMorariFirstOrder(const double *params_) : ModelStandardIMC(params_) {
+	ModelRiveraMorariFirstOrder(const double_t *params_) : ModelStandardIMC(params_) {
 		Kc = (2 * params[PARAM_T] + params[PARAM_L]) / (2 * params[PARAM_K] * (lambda + params[PARAM_L]));
 		Ti = params[PARAM_T] + 0.5 * params[PARAM_L];
 		Td = params[PARAM_T] * params[PARAM_L] / (2.0 * params[PARAM_T] + params[PARAM_L]);
@@ -178,7 +178,7 @@ public:
 // "Proceedings of the IFAC adaptive control of chemical processes conference, Copenhagen, Denmark, 1988, pp. 147-152."
 class ModelChienHronesReswickSecondOrder : public ModelStandardIMC {
 public:
-	ModelChienHronesReswickSecondOrder(const double *params_) : ModelStandardIMC(params_) {
+	ModelChienHronesReswickSecondOrder(const double_t *params_) : ModelStandardIMC(params_) {
 		Ti = params[PARAM_T] + params[PARAM_T2];
 		Td = params[PARAM_T] * params[PARAM_T2] / Ti;
 		Kc = Ti / (params[PARAM_K] * (lambda + params[PARAM_L]));
@@ -189,8 +189,8 @@ public:
 // "Step disturbance".
 class ModelVanDerGrintenSecondOrder : public ModelStandard {
 public:
-	ModelVanDerGrintenSecondOrder(const double *params_) : ModelStandard(params_) {
-		double T12 = params[PARAM_T] + params[PARAM_T2];
+	ModelVanDerGrintenSecondOrder(const double_t *params_) : ModelStandard(params_) {
+		double_t T12 = params[PARAM_T] + params[PARAM_T2];
 		Ti = T12 + 0.5 * params[PARAM_L];
 		Td = (T12 * params[PARAM_L] + 2.0 * params[PARAM_T] * params[PARAM_T2]) / (params[PARAM_L] + 2.0 * T12);
 		Kc = (0.5 + T12 / params[PARAM_L]) / params[PARAM_K];
@@ -201,9 +201,9 @@ public:
 // Suited for overdamped response and significant delay.
 class ModelHaalmanPembertonSecondOrder : public ModelStandard {
 public:
-	ModelHaalmanPembertonSecondOrder(const double *params_) : ModelStandard(params_) {
-		double T1divT2 = params[PARAM_T] / params[PARAM_T2];
-		double LdivT2 = params[PARAM_L] / params[PARAM_T2];
+	ModelHaalmanPembertonSecondOrder(const double_t *params_) : ModelStandard(params_) {
+		double_t T1divT2 = params[PARAM_T] / params[PARAM_T2];
+		double_t LdivT2 = params[PARAM_L] / params[PARAM_T2];
 		Ti = params[PARAM_T] + params[PARAM_T2];
 		Kc = 2.0 * Ti / (3 * params[PARAM_K] * params[PARAM_L]);
 
@@ -220,11 +220,11 @@ public:
 // Lee, Y., Park, S., Lee, M., and Brosilow, C., PID controller tuning for desired closed - loop responses for SI / SO systems. AIChE J. 44, 106–115 1998.
 class ModelMaclaurinSecondOrder : public ModelStandardIMC {
 public:
-	ModelMaclaurinSecondOrder(const double *params_) : ModelStandardIMC(params_) {
-		double T1T2 = params[PARAM_T] + params[PARAM_T2];
-		double L = params[PARAM_L];
-		double L2 = L * L;
-		double twolL = 2.0 * lambda + L;
+	ModelMaclaurinSecondOrder(const double_t *params_) : ModelStandardIMC(params_) {
+		double_t T1T2 = params[PARAM_T] + params[PARAM_T2];
+		double_t L = params[PARAM_L];
+		double_t L2 = L * L;
+		double_t twolL = 2.0 * lambda + L;
 		Ti = T1T2 - (2.0 * lambda * lambda - L2) / (2.0 * twolL);
 		Kc = Ti / (params[PARAM_K] * twolL);
 		Td = Ti - T1T2 + (params[PARAM_T] * params[PARAM_T2] - L2 * L / (6.0 * twolL)) / Ti;
@@ -239,16 +239,16 @@ public:
 		pidParams[PARAM_Kd] = initial->getKd();
 	}
 
-	virtual float getKp() const {
-		return (float)pidParams[PARAM_Kp];
+	virtual float_t getKp() const {
+		return (float_t)pidParams[PARAM_Kp];
 	}
-	virtual float getKi() const {
-		return (float)pidParams[PARAM_Ki];
+	virtual float_t getKi() const {
+		return (float_t)pidParams[PARAM_Ki];
 	}
-	virtual float getKd() const {
-		return (float)pidParams[PARAM_Kd];
+	virtual float_t getKd() const {
+		return (float_t)pidParams[PARAM_Kd];
 	}
 
 protected:
-	double pidParams[numParamsForPid];
+	double_t pidParams[numParamsForPid];
 };

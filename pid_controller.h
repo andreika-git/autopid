@@ -1,4 +1,4 @@
-/*
+﻿/*
 * @file	pid_controller.h
 *
 * PID Controller models needed to verify the parameters.
@@ -16,7 +16,7 @@ public:
 	PidController(const pid_s & p_) : p(p_) {
 	}
 
-	double limitOutput(double v) {
+	double_t limitOutput(double_t v) {
 		if (v < p.minValue)
 			v = p.minValue;
 		if (v > p.maxValue)
@@ -34,8 +34,8 @@ public:
 		pTerm = iTerm = dTerm = 0.0;
 	}
 
-	double getOutput(double target, double input, double dTime) {
-		double error = target - input;
+	double_t getOutput(double_t target, double_t input, double_t dTime) {
+		double_t error = target - input;
 		pTerm = p.pFactor * error;
 		iTerm += p.iFactor * dTime * error;
 		dTerm = p.dFactor / dTime * (error - previousError);
@@ -45,8 +45,58 @@ public:
 	}
 
 protected:
-	double pTerm, iTerm, dTerm;
-	double previousError = 0;
+	double_t pTerm, iTerm, dTerm;
+	double_t previousError = 0;
+};
+
+// PID with derivative filtering (backward differences) and integrator anti-windup.
+// See: Wittenmark B., Åström K., Årzén K. IFAC Professional Brief. Computer Control: An Overview. 
+// Two additional parameters used: derivativeFilterLoss and antiwindupFreq
+//   (If both are 0, then this controller is identical to PidParallelController)
+class PidIndustrialController : public PidParallelController {
+public:
+	PidIndustrialController(const pid_s & p_) : PidParallelController(p_) {
+	}
+
+	double_t getOutput(double_t target, double_t input, double_t dTime) {
+		double_t ad, bd;
+		double_t error = target - input;
+		pTerm = p.pFactor * error;
+
+		// update the I-term
+		iTerm += p.iFactor * dTime * error;
+		
+		// calculate dTerm coefficients
+		if (fabs(p.derivativeFilterLoss) > DBL_EPSILON) {
+			// restore Td in the Standard form from the Parallel form: Td = Kd / Kc
+			double_t Td = p.dFactor / p.pFactor;
+			// calculate the backward differences approximation of the derivative term
+			ad = Td / (Td + dTime / p.derivativeFilterLoss);
+			bd = p.pFactor * ad / p.derivativeFilterLoss;
+		} else {
+			// According to the Theory of limits, if p.derivativeFilterLoss -> 0, then 
+			//   lim(ad) = 0; lim(bd) = p.pFactor * Td / dTime = p.dFactor / dTime
+			//   i.e. dTerm becomes equal to PidParallelController's
+			ad = 0.0;
+			bd = p.dFactor / dTime;
+		}
+		
+		// (error - previousError) = (target-input) - (target-prevousInput) = -(input - prevousInput)
+		dTerm = dTerm * ad + (error - previousError) * bd;
+
+		// calculate output and apply the limits
+		double_t output = pTerm + iTerm + dTerm + p.offset;
+		double_t limitedOutput = limitOutput(output);
+
+		// apply the integrator anti-windup
+		// If p.antiwindupFreq = 0, then iTerm is equal to PidParallelController's
+		iTerm += dTime * p.antiwindupFreq * (limitedOutput - output);
+		
+		// update the state
+		previousError = error;
+
+		return limitedOutput;
+	}
 };
 
 // C(s) = Kp + (Ki / s) + (N * Kd * s / (1 + N / s))
@@ -54,24 +104,24 @@ protected:
 // See: https://www.scilab.org/discrete-time-pid-controller-implementation
 class PidDerivativeFilterController : public PidController {
 public:
-	PidDerivativeFilterController(const pid_s & p_, double n_) : PidController(p_), N(n_) {
+	PidDerivativeFilterController(const pid_s & p_, double_t n_) : PidController(p_), N(n_) {
 	}
 
-	double getOutput(double target, double input, double dTime) {
-		double error = target - input;
-		double a0 = (1.0 + N * dTime);
-		double a1 = -(2.0 + N * dTime);
+	double_t getOutput(double_t target, double_t input, double_t dTime) {
+		double_t error = target - input;
+		double_t a0 = (1.0 + N * dTime);
+		double_t a1 = -(2.0 + N * dTime);
 
-		double a2 = 1.0;
-		double b0 = p.pFactor * (1.0 + N * dTime) + p.iFactor * dTime * (1.0 + N * dTime) + p.dFactor * N;
-		double b1 = -(p.pFactor * (2.0 + N * dTime) + p.iFactor * dTime + 2.0 * p.dFactor * N);
-		double b2 = p.pFactor + p.dFactor * N;
+		double_t a2 = 1.0;
+		double_t b0 = p.pFactor * (1.0 + N * dTime) + p.iFactor * dTime * (1.0 + N * dTime) + p.dFactor * N;
+		double_t b1 = -(p.pFactor * (2.0 + N * dTime) + p.iFactor * dTime + 2.0 * p.dFactor * N);
+		double_t b2 = p.pFactor + p.dFactor * N;
 
-		double ku1 = a1 / a0; 
-		double ku2 = a2 / a0; 
-		double ke0 = b0 / a0; 
-		double ke1 = b1 / a0; 
-		double ke2 = b2 / a0;
+		double_t ku1 = a1 / a0; 
+		double_t ku2 = a2 / a0; 
+		double_t ke0 = b0 / a0; 
+		double_t ke1 = b1 / a0; 
+		double_t ke2 = b2 / a0;
 
 		e2 = e1; 
 		e1 = e0; 
@@ -87,8 +137,8 @@ public:
 	}
 
 protected:
-	double e2 = 0, e1 = 0, e0 = 0, u2 = 0, u1 = 0, u0 = 0;
-	double N = 1;
+	double_t e2 = 0, e1 = 0, e0 = 0, u2 = 0, u1 = 0, u0 = 0;
+	double_t N = 1;
 };
 
 // Calculate ITAE/ISE and Overshoot
@@ -101,35 +151,43 @@ public:
 		lastValue = 0;
 	}
 
-	void addPoint(double i, double value, double target) {
-		double e = target - value;
+	void addPoint(double_t i, double_t value, double_t target) {
+		double_t e = target - value;
 		itae += i * fabs(e);
 		ise += e * e;
-		double overshoot = (value - target) / target;
+		double_t overshoot = (value - target) / target;
 		if (overshoot > 0 && overshoot > maxOvershoot)
 			maxOvershoot = overshoot;
 		lastValue = value;
 	}
 
-	double getItae() const {
+	double_t getItae() const {
 		return itae;
 	}
 
-	double getIse() const {
+	double_t getIse() const {
 		return ise;
 	}
 
-	double getMaxOvershoot() const {
+	double_t getMaxOvershoot() const {
 		return maxOvershoot;
 	}
 
-	double getLastValue() const {
+	double_t getLastValue() const {
 		return lastValue;
 	}
 
+	double_t getMerit() const {
+		//return getItae();
+#if 1
+		double overShootWeight = 10000.0;
+		return getItae() + overShootWeight * getMaxOvershoot() * getMaxOvershoot();
+#endif
+	}
+
 private:
-	double itae = 0;	// Integral time-weighted absolute error
-	double ise = 0;		// Integral square error
-	double maxOvershoot = 0;
-	double lastValue = 0;
+	double_t itae = 0;	// Integral time-weighted absolute error
+	double_t ise = 0;		// Integral square error
+	double_t maxOvershoot = 0;
+	double_t lastValue = 0;
 };

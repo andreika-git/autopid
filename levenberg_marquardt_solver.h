@@ -26,19 +26,28 @@ public:
 	// Get the total number of data points
 	virtual int getNumPoints() const = 0;
 
-	virtual void justifyParams(double *params) const = 0;
+	virtual void justifyParams(double_t *params) const = 0;
 
 	/// Returns the y value of the function for the given x and vector of parameters
-	virtual double getEstimatedValueAtPoint(int i, const double *params) const = 0;
+	virtual double_t getEstimatedValueAtPoint(int i, const double_t *params) const {
+#ifdef LM_USE_CACHE
+		return points[0][i];
+#else
+		return calcEstimatedValuesAtPoint(i, params);
+#endif
+	}
+
+	/// Returns the y value of the function for the given x and vector of parameters
+	virtual double_t calcEstimatedValuesAtPoint(int i, const double_t *params) const = 0;
 
 	/// Returns the residual (error delta) of the function (return (dataPoints[i] - estimatedPoint(i)))
-	virtual double getResidual(int i, const double *params) const = 0;
+	virtual double_t getResidual(int i, const double_t *params) const = 0;
 
 	// Calculate the sum of the squares of the residuals
-	virtual double calcMerit(double *params) const {
-		double res = 0;
+	virtual double_t calcMerit(double_t *params) const {
+		double_t res = 0;
 		for (int i = 0; i < getNumPoints(); i++) {
-			double r = getResidual(i, params);
+			double_t r = getResidual(i, params);
 			res += r * r;
 		}
 		return res;
@@ -46,52 +55,68 @@ public:
 
 	/// Return the partial derivate of the function with respect to parameter pIndex at point [i].
 	/// Can be overridden if analytical gradient function's representation is available
-	virtual double getPartialDerivative(int i, const double *params, int pIndex) const {
-#ifdef LM_USE_CACHE
-		return pderivs[pIndex][i];
-	}
-	virtual double getPartialDerivativeInternal(int i, const double *params, int pIndex) const {
-#endif
-		// some magic value
-		const double delta = 1.0e-6;
+	virtual double_t getPartialDerivative(int i, const double_t *params, int pIndex) const {
 		// we need to alter parameters around the neighborhood of 'pIndex', so we make a working copy
-		double tmpParams[numParams];
+#ifdef LM_USE_CACHE
+		int p = 1 + pIndex * 2;
+		double_t dplusResult = points[p][i];
+		double_t dminusResult = points[p + 1][i];
+#else
+		double_t tmpParams[numParams];
 		for (int k = 0; k < numParams; k++)
 			tmpParams[k] = params[k];
 
 		tmpParams[pIndex] = params[pIndex] + delta;
-		double dplusResult = getEstimatedValueAtPoint(i, tmpParams);
+		double_t dplusResult = getEstimatedValueAtPoint(i, tmpParams);
 
 		tmpParams[pIndex] = params[pIndex] - delta;
-		double dminusResult = getEstimatedValueAtPoint(i, tmpParams);
+		double_t dminusResult = getEstimatedValueAtPoint(i, tmpParams);
+#endif
 
 		return (dplusResult - dminusResult) / (delta * 2.0);
 	}
 
+	void calculateAllPoints(const double_t *params) {
 #ifdef LM_USE_CACHE
-	void calculateAllPartialDerivatives(const double *params) {
-		for (int i = 0; i < numParams; i++) {
-			pderivs[i].resize(getNumPoints());
+		for (int i = 0; i < numPointGroups; i++) {
+			points[i].resize(getNumPoints());
 		}
-		for (int p = 0; p < numParams; p++) {
+		// calculate displaced points for partial derivatives
+		for (int pIndex = 0; pIndex < numParams; pIndex++) {
+			double_t tmpParams[numParams];
+			for (int k = 0; k < numParams; k++)
+				tmpParams[k] = params[k];
+			// 2 points for each derivative: +delta and -delta
+			for (int plusMinus = 0; plusMinus < 2; plusMinus++) {
+				tmpParams[pIndex] = params[pIndex] + (plusMinus == 0 ? delta : -delta);
+				int p = 1 + pIndex * 2 + plusMinus;
+				for (int i = 0; i < getNumPoints(); i++) {
+					points[p][i] = calcEstimatedValuesAtPoint(i, tmpParams);
+				}
+			}
 			for (int i = 0; i < getNumPoints(); i++) {
-				pderivs[p][i] = getPartialDerivativeInternal(i, params, p);
+				points[0][i] = calcEstimatedValuesAtPoint(i, params);
 			}
 		}
-	}
 #endif
+	}
 
 private:
 #ifdef LM_USE_CACHE
-	std::vector<double> pderivs[numParams];
+	static const int numPointGroups = numParams * 2 + 1;
+	std::vector<double_t> points[numPointGroups];
 #endif
+
+protected:
+	// some magic value for the differentiation step to calculate a partial derivative
+	double_t delta = 1.0e-6;
 };
 
 template<int numParams>
 class LevenbergMarquardtSolver {
 public:
 	// ctor
-	LevenbergMarquardtSolver(LMSFunction<numParams> *func, double *parameters) {
+	LevenbergMarquardtSolver(LMSFunction<numParams> *func, double_t *parameters) {
 		this->func = func;
 		this->parameters = parameters;
 	}
@@ -99,22 +124,21 @@ public:
 	// lambda - magic coef.
 	// maxIterations - if too many iterations (loop exit condition #1)
 	// minDelta - if the progress on iteration is too small (loop exit condition #2)
-	int solve(double lambda_ = 0.001, double minDelta = 1e-15, int maxIterations = 100) {
+	int solve(double_t lambda_ = 0.001, double_t minDelta = 1e-15, int maxIterations = 100) {
 		this->lambda = lambda_;
 
 		iterationCount = 0;
 		
-		double delta = 0;
+		func->calculateAllPoints(parameters);
+		double_t delta = 0;
 		do {
-			double merit = func->calcMerit(parameters);
+			double_t merit = func->calcMerit(parameters);
 
-#ifdef LM_USE_CACHE
-			func->calculateAllPartialDerivatives(parameters);
-#endif
 			calcGradient();
 			calcHessian();
 			bool isSolved = calcNewParameters();
-			double newMerit = func->calcMerit(newParameters);
+			func->calculateAllPoints(newParameters);
+			double_t newMerit = func->calcMerit(newParameters);
 			if (!isSolved) {
 				return -iterationCount;
 			}
@@ -133,15 +157,15 @@ public:
 			// find out if we progressed enough in this iteration
 			delta = fabs(newMerit - merit);
 #ifdef LMS_DEBUG
-			printf("[%d] (%g,%g,%g,%g) l=%g merit %g->%g, dm=%g\r\n", iterationCount, parameters[0], parameters[1], parameters[2], parameters[3], lambda, 
-				merit, newMerit, newMerit - merit);
+			printf("[%d] (%Lg,%Lg,%Lg,%Lg) l=%Lg merit %Lg->%Lg, dm=%Lg\r\n", iterationCount, (long double)parameters[0], (long double)parameters[1], (long double)parameters[2], (long double)parameters[3], 
+				(long double)lambda, (long double)merit, (long double)newMerit, (long double)(newMerit - merit));
 #endif
 			iterationCount++;
 		} while (delta > minDelta && iterationCount < maxIterations);
 		return iterationCount;
 	}
 
-	double *getParameters() const {
+	double_t *getParameters() const {
 		return parameters;
 	}
 	
@@ -149,13 +173,13 @@ protected:
 	// Find the parameter increments by solving the Hessian x Gradient equation
 	bool calcNewParameters() {
 		// get H^-1 matrix (inverse Hessian)
-		double hinv[numParams][numParams];
-		bool ret = MatrixHelper<double, numParams>::inverseMatrix(hinv, hessian);
+		double_t hinv[numParams][numParams];
+		bool ret = MatrixHelper<double_t, numParams>::inverseMatrix(hinv, hessian);
 		if (!ret)
 			return false;
 
 		for (int row = 0; row < numParams; row++) {
-			double increment = 0;
+			double_t increment = 0;
 			for (int col = 0; col < numParams; col++) {
 				increment += hinv[row][col] * gradient[col];
 			}
@@ -170,7 +194,7 @@ protected:
 	void calcHessian() {
 		for (int row = 0; row < numParams; row++) {
 			for (int col = 0; col < numParams; col++) {
-				double res = 0;
+				double_t res = 0;
 				for (int i = 0; i < func->getNumPoints(); i++) {
 					res += func->getPartialDerivative(i, parameters, row) * func->getPartialDerivative(i, parameters, col);
 				}
@@ -182,7 +206,7 @@ protected:
 	// Calculate the 1st derivatives of the residual func
 	void calcGradient() {
 		for (int row = 0; row < numParams; row++) {
-			double res = 0;
+			double_t res = 0;
 			for (int i = 0; i < func->getNumPoints(); i++) {
 				res += func->getResidual(i, parameters) * func->getPartialDerivative(i, parameters, row);
 			}
@@ -195,21 +219,21 @@ private:
 	LMSFunction<numParams> *func;
 
 	// Current (accepted) parameters vector
-	double *parameters; // [numParams]
+	double_t *parameters; // [numParams]
 
 	// Incremented (next step) parameters vector
-	double newParameters[numParams];
+	double_t newParameters[numParams];
 
 	// Hessian matrix
-	double hessian[numParams][numParams];
+	double_t hessian[numParams][numParams];
 	// Gradients vector
-	double gradient[numParams];
+	double_t gradient[numParams];
 
 	// some magic number
-	const double lambdaMultiplier = 10.0;
+	const double_t lambdaMultiplier = 10.0;
 
 	// coeff used to adapt the descent step (and speed)
-	double lambda;
+	double_t lambda;
 
 	// Total number of iterations
 	int iterationCount;

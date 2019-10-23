@@ -25,10 +25,10 @@
 /// These settings should be obtained from the measured data
 class PidAutoTuneSettings {
 public:
-	double minValue, maxValue;
-	double stepPoint, maxPoint;
-	double timeScale;
-	double targetValue;
+	double_t minValue, maxValue;
+	double_t stepPoint, maxPoint;
+	double_t timeScale;
+	double_t targetValue;
 };
 
 // PID auto-tune method using different tuning rules and FOPDT/SOPDT models
@@ -38,7 +38,7 @@ public:
 		measuredData.init();
 	}
 
-	void addData(float v) {
+	void addData(float_t v) {
 		measuredData.addDataPoint(v);
 	}
 
@@ -46,7 +46,7 @@ public:
 	// stepPoint - data index where the step was done
 	// maxPoint - data index where the output was saturated
 	// this is not thread-safe (because of internal static vars) but anyway it works...
-	bool findPid(pid_sim_type_e simType, pid_tune_method_e method, const PidAutoTuneSettings & settings, const double *initialParams) {
+	bool findPid(pid_sim_type_e simType, pid_tune_method_e method, const PidAutoTuneSettings & settings, const double_t *initialParams) {
 		// save current settings & simType
 		this->settings = settings;
 		this->simType = simType;
@@ -58,7 +58,7 @@ public:
 		pid.maxValue = 100;
 
 #ifdef PID_DEBUG
-		printf("* modelBias=%g avgMin=%g avgMax=%g\r\n", modelBias, avgMeasuredMin, avgMeasuredMax);
+		printf("* modelBias=%Lg avgMin=%Lg avgMax=%Lg\r\n", (long double)modelBias, (long double)avgMeasuredMin, (long double)avgMeasuredMax);
 #endif
 		StepFunction stepFunc(settings.minValue, settings.maxValue, settings.stepPoint, settings.timeScale);
 
@@ -82,7 +82,7 @@ public:
 				}
 			}
 #ifdef PID_DEBUG
-			printf("* Params0: K=%g T1=%g T2=%g L=%g\r\n", params[PARAM_K], params[PARAM_T], params[PARAM_T2], params[PARAM_L]);
+			printf("* Params0: K=%Lg T1=%Lg T2=%Lg L=%Lg\r\n", (long double)params[PARAM_K], (long double)params[PARAM_T], (long double)params[PARAM_T2], (long double)params[PARAM_L]);
 #endif
 		}
 		else {
@@ -90,7 +90,7 @@ public:
 			memcpy(params, initialParams, sizeof(params));
 		}
 
-		double merit0, merit;
+		double_t merit0, merit;
 #ifdef PID_DEBUG
 		printf("* Solving...\r\n");
 #endif
@@ -99,6 +99,7 @@ public:
 			// 1st order
 			FirstOrderPlusDelayLineFunction func(&stepFunc, measuredData.getBuf(), measuredData.getNumDataPoints(), modelBias);
 			func.justifyParams(params);
+			func.calculateAllPoints(params);
 			const int numParams1stOrder = 3;
 			outputFunc<numParams1stOrder>("pid_func01.csv", func, stepFunc, params);
 			LevenbergMarquardtSolver<numParams1stOrder> solver(&func, params);
@@ -111,6 +112,7 @@ public:
 			// 2nd order or approximated 2nd->1st order
 			SecondOrderPlusDelayLineOverdampedFunction func(&stepFunc, measuredData.getBuf(), measuredData.getNumDataPoints(), modelBias);
 			func.justifyParams(params);
+			func.calculateAllPoints(params);
 			const int numParams2ndOrder = 4;
 			outputFunc<numParams2ndOrder>("pid_func02.csv", func, stepFunc, params);
 			LevenbergMarquardtSolver<numParams2ndOrder> solver(&func, params);
@@ -166,8 +168,9 @@ public:
 		pid.pFactor = model->getKp();
 		pid.iFactor = model->getKi();
 		pid.dFactor = model->getKd();
-		pid.offset = getPidOffset(model);
-		pid.periodMs = 1000.0 / settings.timeScale;
+		// round offset and period due to the firmware limitations...
+		pid.offset = round(getPidOffset(model));
+		pid.periodMs = round((float_t)(1000.0 / settings.timeScale));
 
 		pid0 = pid;
 
@@ -195,7 +198,7 @@ public:
 		}
 	}
 
-	double const *getParams() const {
+	double_t const *getParams() const {
 		return params;
 	}
 
@@ -207,20 +210,20 @@ public:
 		return pid0;
 	}
 
-	double getAvgMeasuredMin() const {
+	double_t getAvgMeasuredMin() const {
 		return avgMeasuredMin;
 	}
 
-	double getAvgMeasuredMax() const {
+	double_t getAvgMeasuredMax() const {
 		return avgMeasuredMax;
 	}
 
-	double getModelBias() const {
+	double_t getModelBias() const {
 		return modelBias;
 	}
 
 	// The model output is typically shifted
-	double findModelBias() {
+	double_t findModelBias() {
 		if (settings.stepPoint < 0 || settings.maxPoint <= settings.stepPoint || settings.maxPoint > measuredData.getNumDataPoints())
 			return 0;
 		// find the real 'min value' of the measured output data (before the step function goes up).
@@ -235,24 +238,24 @@ public:
 	}
 
 	// If the target value is known, we can estimate the PID offset value based on the model gain and bias.
-	float getPidOffset(ModelOpenLoopPlant *model) const {
-		if (settings.targetValue == 0.0)
+	float_t getPidOffset(ModelOpenLoopPlant *model) const {
+		if (std::isnan(settings.targetValue))
 			return 0;
-		return (settings.targetValue - modelBias) / model->getParams()[PARAM_K];
+		return (float_t)((settings.targetValue - modelBias) / model->getParams()[PARAM_K]);
 	}
 
 	// See: Rangaiah G.P., Krishnaswamy P.R. Estimating Second-Order plus Dead Time Model Parameters, 1994.
 	// Also see: "Practical PID Control", p. 169
-	bool findFirstOrderInitialParams2Points(double *params) const {
+	bool findFirstOrderInitialParams2Points(double_t *params) const {
 		int i0 = (int)settings.stepPoint;
 		int i1 = (int)settings.maxPoint;
 
-		double dy = avgMeasuredMax - avgMeasuredMin;
+		double_t dy = avgMeasuredMax - avgMeasuredMin;
 
-		double t[2];
-		static const double tCoefs[] = { 0.353, 0.853 };
+		double_t t[2];
+		static const double_t tCoefs[] = { 0.353, 0.853 };
 		for (int i = 0; i < 2; i++) {
-			t[i] = getTimeDelta(measuredData.findDataAt((float)(avgMeasuredMin + dy * tCoefs[i]), i0, i1));
+			t[i] = getTimeDelta(measuredData.findDataAt((float_t)(avgMeasuredMin + dy * tCoefs[i]), i0, i1));
 			if (t[i] < 0.0)
 				return false;
 		}
@@ -266,37 +269,37 @@ public:
 
 	// See: Rangaiah G.P., Krishnaswamy P.R. Estimating Second-Order plus Dead Time Model Parameters, 1994.
 	// Also see: "Practical PID Control", p. 187
-	bool findSecondOrderInitialParams3Points(double *params) const {
+	bool findSecondOrderInitialParams3Points(double_t *params) const {
 		int i0 = (int)settings.stepPoint;
 		int i1 = (int)settings.maxPoint;
 
-		double dy = avgMeasuredMax - avgMeasuredMin;
+		double_t dy = avgMeasuredMax - avgMeasuredMin;
 
-		double t[3];
-		static const double tCoefs[] = { 0.14, 0.55, 0.91 };
+		double_t t[3];
+		static const double_t tCoefs[] = { 0.14, 0.55, 0.91 };
 		for (int i = 0; i < 3; i++) {
-			t[i] = getTimeDelta(measuredData.findDataAt((float)(avgMeasuredMin + dy * tCoefs[i]), i0, i1));
+			t[i] = getTimeDelta(measuredData.findDataAt((float_t)(avgMeasuredMin + dy * tCoefs[i]), i0, i1));
 			if (t[i] == 0.0)
 				return false;
 		}
-		double alpha = (t[2] - t[1]) / (t[1] - t[0]);
+		double_t alpha = (t[2] - t[1]) / (t[1] - t[0]);
 #if 0
 		// check if usable range?
 		if (alpha < 1.2323 || alpha > 2.4850) {
 			return false;
 		}
 #endif
-		double beta = log(alpha / (2.485 - alpha));
-		double xi = 0.50906 + 0.51743 * beta - 0.076284 * pow(beta, 2) + 0.041363 * pow(beta, 3)
+		double_t beta = log(alpha / (2.485 - alpha));
+		double_t xi = 0.50906 + 0.51743 * beta - 0.076284 * pow(beta, 2) + 0.041363 * pow(beta, 3)
 			- 0.0049224 * pow(beta, 4) + 0.00021234 * pow(beta, 5);
-		double Tcoef = 0.85818 - 0.62907 * xi + 1.2897 * pow(xi, 2) - 0.36859 * pow(xi, 3) + 0.038891 * pow(xi, 4);
-		double Lcoef = 1.39200 - 0.52536 * xi + 1.2991 * pow(xi, 2) - 0.36859 * pow(xi, 3) + 0.037605 * pow(xi, 4);
+		double_t Tcoef = 0.85818 - 0.62907 * xi + 1.2897 * pow(xi, 2) - 0.36859 * pow(xi, 3) + 0.038891 * pow(xi, 4);
+		double_t Lcoef = 1.39200 - 0.52536 * xi + 1.2991 * pow(xi, 2) - 0.36859 * pow(xi, 3) + 0.037605 * pow(xi, 4);
 
-		double T = Tcoef / (t[1] - t[0]);
+		double_t T = Tcoef / (t[1] - t[0]);
 		// we've got T and xi, and we have to solve quadratic equation to get T1 and T2:
 		// T = T1*T2
 		// Xi = (T1 + T2) / (T1*T2)
-		double det = (T * xi) * (T * xi) - 4.0 * T;
+		double_t det = (T * xi) * (T * xi) - 4.0 * T;
 
 		params[PARAM_K] = dy / (settings.maxValue - settings.minValue);
 		if (det < 0) {
@@ -321,25 +324,25 @@ public:
 
 	// See: Harriott P. Process control (1964). McGraw-Hill. USA.
 	// Also see: "Practical PID Control", p. 182
-	bool findSecondOrderInitialParamsHarriott(double *params) const {
+	bool findSecondOrderInitialParamsHarriott(double_t *params) const {
 		static const HarriotFunction hfunc;
 
 		int i0 = (int)settings.stepPoint;
 		int i1 = (int)settings.maxPoint;
 
-		double dy = avgMeasuredMax - avgMeasuredMin;
+		double_t dy = avgMeasuredMax - avgMeasuredMin;
 
-		double A1 = -measuredData.getArea(i0, i1, (float)avgMeasuredMax) / settings.timeScale;
+		double_t A1 = -measuredData.getArea(i0, i1, (float_t)avgMeasuredMax) / settings.timeScale;
 
-		double t73 = getTimeDelta(measuredData.findDataAt((float)(avgMeasuredMin + dy * 0.73), i0, i1));
-		double tm = i0 + 0.5 * (t73 / 1.3) * settings.timeScale;
-		double ym = measuredData.getValue((float)tm);
+		double_t t73 = getTimeDelta(measuredData.findDataAt((float_t)(avgMeasuredMin + dy * 0.73), i0, i1));
+		double_t tm = i0 + 0.5 * (t73 / 1.3) * settings.timeScale;
+		double_t ym = measuredData.getValue((float_t)tm);
 		// normalize
-		double ymn = (ym - avgMeasuredMin) / dy;
+		double_t ymn = (ym - avgMeasuredMin) / dy;
 		// sanity check?
 		if (ymn < HarriotFunction::minX || ymn > HarriotFunction::maxX)
 			return false;
-		double r = hfunc.getValue(ymn);
+		double_t r = hfunc.getValue(ymn);
 
 		params[PARAM_K] = dy / (settings.maxValue - settings.minValue);
 		params[PARAM_L] = A1 - t73 / 1.3;
@@ -349,31 +352,33 @@ public:
 		return true;
 	}
 
-	double getTimeDelta(int i1) const {
+	double_t getTimeDelta(int i1) const {
 		if (i1 < 0)
 			return -1.0;
-		return (double)(i1 - settings.stepPoint) / settings.timeScale;
+		return (double_t)(i1 - settings.stepPoint) / settings.timeScale;
 	}
 
 	// Use automatic LM-solver to find the best PID coefs which satisfy the minimal PID metric.
 	// The initial PID coefs are already calculated using the well-known CHR method (1st or 2nd order).
 	bool solveModel(pid_tune_method_e method, ModelAutoSolver & model) {
-		double merit0, merit;
+		double_t merit0, merit;
 		
 #ifdef PID_DEBUG
 		printf("* Solving for better coefs:\r\n");
 #endif
 		// todo: is it correct?
-		double dTime = 1.0 / settings.timeScale;
+		double_t dTime = pid.periodMs / 1000.0;
 		const int numSimPoints = 1024;
-		PidSimulatorFactory<numSimPoints> simFactory(simType, getMethodOrder(method), getAvgMeasuredMin(), getAvgMeasuredMax(), dTime, modelBias, pid);
+		PidSimulatorFactory<numSimPoints> simFactory(simType, getMethodOrder(method), getAvgMeasuredMin(), getAvgMeasuredMax(), settings.targetValue, dTime, modelBias, pid);
 		PidCoefsFinderFunction<numSimPoints> func(&simFactory, params);
 		func.justifyParams(model.getParams());
 		merit0 = func.calcMerit(model.getParams());
 
 		// now hopefully we'll find even better coefs!
 		LevenbergMarquardtSolver<numParamsForPid> solver((LMSFunction<numParamsForPid> *)&func, model.getParams());
-		int iterationCount = solver.solve();
+		double lambdaForPid = 10.0;
+		double minDeltaForPid = 1.e-7;
+		int iterationCount = solver.solve(lambdaForPid, minDeltaForPid);
 		
 		merit = func.calcMerit(model.getParams());
 #ifdef PID_DEBUG
@@ -383,21 +388,22 @@ public:
 	}
 	
 	template <int numParams>
-	void outputFunc(const char *fname, const AbstractDelayLineFunction<numParams> & func, const StepFunction & stepFunc, double *params) {
+	void outputFunc(const char *fname, const AbstractDelayLineFunction<numParams> & func, const StepFunction & stepFunc, double_t *params) {
 #ifdef PID_DEBUG
+		//func.calculateAllPoints(params);
 		for (int i = 0; i < func.getNumPoints(); i++) {
-			double v = func.getEstimatedValueAtPoint(i, params);
-			double sv = stepFunc.getValue((float)i, 0);
-			output_csv(fname, (double)i, func.getDataPoint(i), v, sv);
+			double_t v = func.getEstimatedValueAtPoint(i, params);
+			double_t sv = stepFunc.getValue((float_t)i, 0);
+			output_csv(fname, (double_t)i, func.getDataPoint(i), v, sv);
 		}
 #endif
 	}
 
-	void printSolverResult(int iterationCount, double merit0, double merit) {
+	void printSolverResult(int iterationCount, double_t merit0, double_t merit) {
 		if (iterationCount > 0)
-			printf("* The solver finished in %d iterations! (Merit: %g -> %g)\r\n", iterationCount, merit0, merit);
+			printf("* The solver finished in %d iterations! (Merit: %Lg -> %Lg)\r\n", iterationCount, (long double)merit0, (long double)merit);
 		else
-			printf("* The solver aborted after %d iterations! (Merit: %g -> %g)\r\n", -iterationCount, merit0, merit);
+			printf("* The solver aborted after %d iterations! (Merit: %Lg -> %Lg)\r\n", -iterationCount, (long double)merit0, (long double)merit);
 	}
 
 
@@ -405,11 +411,11 @@ protected:
 	AveragingDataBuffer<MAX_DATA_POINTS> measuredData;
 	PidAutoTuneSettings settings;
 	pid_sim_type_e simType;
-	double params[4] = { 0 };
+	double_t params[4] = { 0 };
 	pid_s pid;
 	pid_s pid0;	// not-optimized
 	int iterationCount = 0;
-	double avgMeasuredMin, avgMeasuredMax;
-	double modelBias;
+	double_t avgMeasuredMin, avgMeasuredMax;
+	double_t modelBias;
 };
 

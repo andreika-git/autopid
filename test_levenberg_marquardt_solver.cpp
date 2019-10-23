@@ -14,10 +14,10 @@
 class GaussianFunction : public LMSFunction<6> {
 	const int numParams = 6;
 public:
-	GaussianFunction(int numPoints_, double *xValues_, double *yValues_) : numPoints(numPoints_), xValues(xValues_), yValues(yValues_) {
+	GaussianFunction(int numPoints_, double_t *xValues_, double_t *yValues_) : numPoints(numPoints_), xValues(xValues_), yValues(yValues_) {
 	}
 
-	virtual void justifyParams(double *params) const {
+	virtual void justifyParams(double_t *params) const {
 	}
 
 	// Get the total number of data points
@@ -25,24 +25,24 @@ public:
 		return numPoints;
 	}
 
-	virtual double getEstimatedValueAtPoint(int pi, const double *params) const {
-		double val = 0.0;
+	virtual double_t calcEstimatedValuesAtPoint(int pi, const double_t *params) const {
+		double_t val = 0.0;
 		for (int j = 0, i = 0; j < (numParams / 3); j++, i += 3)
 		{
-			double arg = (xValues[pi] - params[i + 1]) / params[i + 2];
+			double_t arg = (xValues[pi] - params[i + 1]) / params[i + 2];
 			val += params[i] * exp(-arg * arg);
 		}
 		return val;
 	}
 
-	virtual double getResidual(int i, const double *params) const {
+	virtual double_t getResidual(int i, const double_t *params) const {
 		return yValues[i] - getEstimatedValueAtPoint(i, params);
 	}
 
 private:
 	int numPoints;
-	double *xValues;
-	double *yValues;
+	double_t *xValues;
+	double_t *yValues;
 };
 
 void testGaussianFunction() {
@@ -51,14 +51,14 @@ void testGaussianFunction() {
 	const int numParams = 6;
 	const int numPoints = 100;
 	
-	const double goodParams[numParams] = { 5, 2, 3, 2, 5, 3 };
+	const double_t goodParams[numParams] = { 5, 2, 3, 2, 5, 3 };
 	
-	double xValues[numPoints];
+	double_t xValues[numPoints];
 	for (i = 0; i < numPoints; i++) {
-		xValues[i] = 0.1 * (double)(i + 1); 
+		xValues[i] = 0.1 * (double_t)(i + 1); 
 	}
 	
-	double yValues[numPoints];
+	double_t yValues[numPoints];
 
 	GaussianFunction func(numPoints, xValues, yValues);
 
@@ -67,7 +67,7 @@ void testGaussianFunction() {
 		yValues[i] = func.getEstimatedValueAtPoint(i, goodParams);
 	}
 
-	double params[numParams] = { 4, 2, 2, 2, 5, 2 };
+	double_t params[numParams] = { 4, 2, 2, 2, 5, 2 };
 	LevenbergMarquardtSolver<numParams> solver(&func, params);
 
 	int iterationCount = solver.solve(0.001, 1e-15, 100);
@@ -82,7 +82,7 @@ void testGaussianFunction() {
 void testMatrixInverse() {
 	int i, j;
 	const int n = 4;
-	double a[n][n];
+	double_t a[n][n];
 	// fill with some arbitrary values
 	for (i = 0; i < n; i++) {
 		for (j = 0; j < n; j++) {
@@ -90,16 +90,16 @@ void testMatrixInverse() {
 		}
 	}
 
-	double ai[n][n];
-	bool ret = MatrixHelper<double, n>::inverseMatrix(ai, a);
+	double_t ai[n][n];
+	bool ret = MatrixHelper<double_t, n>::inverseMatrix(ai, a);
 	ASSERT_EQ(true, ret);
 
-	double mul[n][n];
-	MatrixHelper<double, n>::multiplyMatrix(mul, ai, a);
+	double_t mul[n][n];
+	MatrixHelper<double_t, n>::multiplyMatrix(mul, ai, a);
 	// A^-1 * A = I
 	for (i = 0; i < n; i++) {
 		for (j = 0; j < n; j++) {
-			double va = (i == j) ? 1.0 : 0;	// identity matrix element
+			double_t va = (i == j) ? 1.0 : 0;	// identity matrix element
 			ASSERT_DOUBLE_EQ(va, mul[i][j]);
 		}
 	}

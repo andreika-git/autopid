@@ -37,49 +37,49 @@ enum {
 const int numParamsForPid = 3;
 
 // the limit used for K and L params
-static const double minParamK = 0.001;
-static const double minParamL = 0.1;
+static const double_t minParamK = 0.001;
+static const double_t minParamL = 0.1;
 
 // T (or T2) has a separate limit, because exp(-1/T) is zero for small T values 
 // (and we need to compare between them to find a direction for optimization method).
-static const double minParamT = 0.01;
+static const double_t minParamT = 0.01;
 
 class InputFunction {
 public:
-	InputFunction(double timeScale_) : timeScale(timeScale_) {
+	InputFunction(double_t timeScale_) : timeScale(timeScale_) {
 	}
 
 	// i = index, d = delay time (in seconds?)
-	virtual double getValue(double i, double d) const = 0;
+	virtual double_t getValue(double_t i, double_t d) const = 0;
 
-	virtual double getTimeScale() const {
+	virtual double_t getTimeScale() const {
 		return timeScale;
 	}
 
 protected:
 	// time scale needed to synchronize between the virtual step function and the real measured data
 	//  timeScale=100 means 100 points per second.
-	double timeScale;
+	double_t timeScale;
 };
 
 // Heaviside step function interpolated between 'min' and 'max' values with 'stepPoint' time offset
 class StepFunction : public InputFunction
 {
 public:
-	StepFunction(double minValue_, double maxValue_, double stepPoint_, double timeScale_) :
+	StepFunction(double_t minValue_, double_t maxValue_, double_t stepPoint_, double_t timeScale_) :
 				minValue(minValue_), maxValue(maxValue_), stepPoint(stepPoint_), InputFunction(timeScale_) {
 	}
 
-	virtual double getValue(double i, double d) const {
+	virtual double_t getValue(double_t i, double_t d) const {
 		// delayed index
-		double id = i - d * timeScale;
+		double_t id = i - d * timeScale;
 #ifdef INTERPOLATED_STEP_FUNCTION
 		// the delay parameter L may not be integer, so we have to interpolate between the closest input values (near and far in the past)
 		int I = (int)id;
-		double fract = id - I;	// 0 = choose near value, 1 = choose far value
+		double_t fract = id - I;	// 0 = choose near value, 1 = choose far value
 		// find two closest input values for the given delay
-		double vNear = (I < stepPoint) ? minValue : maxValue;
-		double vFar = (I + 1 < stepPoint) ? minValue : maxValue;
+		double_t vNear = (I < stepPoint) ? minValue : maxValue;
+		double_t vFar = (I + 1 < stepPoint) ? minValue : maxValue;
 		// interpolate
 		return vFar * fract + vNear * (1.0f - fract);
 #else
@@ -88,15 +88,15 @@ public:
 	}
 
 private:
-	double minValue, maxValue;
-	// stepPoint is float because we have AveragingDataBuffer, and the time axis may be scaled
-	double stepPoint;
+	double_t minValue, maxValue;
+	// stepPoint is not integer because we have AveragingDataBuffer, and the time axis may be scaled
+	double_t stepPoint;
 };
 
 template <int numPoints>
 class StoredDataInputFunction : public InputFunction {
 public:
-	StoredDataInputFunction(double timeScale_) : InputFunction(timeScale_) {
+	StoredDataInputFunction(double_t timeScale_) : InputFunction(timeScale_) {
 		reset();
 	}
 
@@ -104,14 +104,14 @@ public:
 		inputData.init();
 	}
 
-	void addDataPoint(float v) {
+	void addDataPoint(float_t v) {
 		// todo: support data scaling
 		assert(inputData.getNumDataPoints() <= numPoints);
 		inputData.addDataPoint(v);
 	}
 
-	virtual double getValue(double i, double d) const {
-		return inputData.getValue((float)(i - d * timeScale));
+	virtual double_t getValue(double_t i, double_t d) const {
+		return inputData.getValue((float_t)(i - d * timeScale));
 	}
 
 private:
@@ -122,34 +122,34 @@ private:
 template <int numParams>
 class AbstractDelayLineFunction : public LMSFunction<numParams> {
 public:
-	AbstractDelayLineFunction(const InputFunction *input, const float *measuredOutput, int numDataPoints, double modelBias) {
+	AbstractDelayLineFunction(const InputFunction *input, const float_t *measuredOutput, int numDataPoints, double_t modelBias) {
 		dataPoints = measuredOutput;
 		inputFunc = input;
 		numPoints = numDataPoints;
 		this->modelBias = modelBias;
 	}
 
-	virtual double getResidual(int i, const double *params) const {
-		return dataPoints[i] - getEstimatedValueAtPoint(i, params);
+	virtual double_t getResidual(int i, const double_t *params) const {
+		return dataPoints[i] - this->getEstimatedValueAtPoint(i, params);
 	}
 
-	virtual double getEstimatedValueAtPoint(int i, const double *params) const = 0;
+	virtual double_t calcEstimatedValuesAtPoint(int i, const double_t *params) const = 0;
 
 	// Get the total number of data points
 	virtual int getNumPoints() const {
 		return numPoints;
 	}
 
-	float getDataPoint(int i) const {
+	float_t getDataPoint(int i) const {
 		return dataPoints[i];
 	}
 
 protected:
 	const InputFunction *inputFunc;
-	const float *dataPoints;
+	const float_t *dataPoints;
 	int numPoints;
 	// needed to match the "ideal" curve and the real plant data; it doesn't affect the params but helps to fit the curve.
-	double modelBias;
+	double_t modelBias;
 };
 
 // FODPT indirect transfer function used for step response analytic simulation.
@@ -157,33 +157,33 @@ protected:
 // The Laplace representation is: K * exp(-L*s) / (T*s + 1)
 class FirstOrderPlusDelayLineFunction : public AbstractDelayLineFunction<3> {
 public:
-	FirstOrderPlusDelayLineFunction(const InputFunction *input, const float *measuredOutput, int numDataPoints, double modelBias) :
+	FirstOrderPlusDelayLineFunction(const InputFunction *input, const float_t *measuredOutput, int numDataPoints, double_t modelBias) :
 		AbstractDelayLineFunction(input, measuredOutput, numDataPoints, modelBias) {
 	}
 
-	virtual void justifyParams(double *params) const {
+	virtual void justifyParams(double_t *params) const {
 		params[PARAM_L] = fmax(params[PARAM_L], minParamL);
 		params[PARAM_T] = fmax(params[PARAM_T], minParamT);
 		params[PARAM_K] = (fabs(params[PARAM_K]) < minParamK) ? minParamK : params[PARAM_K];
 	}
 
 	// Creating a state-space representation using Rosenbrock system matrix
-	virtual double getEstimatedValueAtPoint(int i, const double *params) const {
+	virtual double_t calcEstimatedValuesAtPoint(int i, const double_t *params) const {
 		// only positive values allowed (todo: choose the limits)
-		double pL = fmax(params[PARAM_L], minParamL);
-		double pT = fmax(params[PARAM_T], minParamT);
-		double pK = (fabs(params[PARAM_K]) < minParamK) ? minParamK : params[PARAM_K];
+		double_t pL = fmax(params[PARAM_L], minParamL);
+		double_t pT = fmax(params[PARAM_T], minParamT);
+		double_t pK = (fabs(params[PARAM_K]) < minParamK) ? minParamK : params[PARAM_K];
 
 		// state-space params
-		double lambda = exp(-1.0 / (pT * inputFunc->getTimeScale()));
+		double_t lambda = exp(-1.0 / (pT * inputFunc->getTimeScale()));
 
 		// todo: find better initial value?
-		double y = inputFunc->getValue(0, 0) * pK;
+		double_t y = inputFunc->getValue(0, 0) * pK;
 		
 		// The FO response function is indirect, so we need to iterate all previous values to find the current one
 		for (int j = 0; j <= i; j++) {
 			// delayed input
-			double inp = inputFunc->getValue((double)j, pL);
+			double_t inp = inputFunc->getValue((double_t)j, pL);
 
 			// indirect model response in Controllable Canonical Form (1st order CCF)
 			y = lambda * y + pK * (1.0 - lambda) * inp;
@@ -200,11 +200,11 @@ public:
 // The Laplace representation is: K * exp(-L * s) / ((T1*T2)*s^2 + (T1+T2)*s + 1)
 class SecondOrderPlusDelayLineOverdampedFunction : public AbstractDelayLineFunction<4> {
 public:
-	SecondOrderPlusDelayLineOverdampedFunction(const InputFunction *input, const float *measuredOutput, int numDataPoints, double modelBias) :
+	SecondOrderPlusDelayLineOverdampedFunction(const InputFunction *input, const float_t *measuredOutput, int numDataPoints, double_t modelBias) :
 		AbstractDelayLineFunction(input, measuredOutput, numDataPoints, modelBias) {
 	}
 
-	virtual void justifyParams(double *params) const {
+	virtual void justifyParams(double_t *params) const {
 		params[PARAM_L] = fmax(params[PARAM_L], minParamL);
 		params[PARAM_T] = fmax(params[PARAM_T], minParamT);
 		params[PARAM_T2] = fmax(params[PARAM_T2], minParamT);
@@ -212,25 +212,25 @@ public:
 	}
 
 	// Creating a state-space representation using Rosenbrock system matrix
-	virtual double getEstimatedValueAtPoint(int i, const double *params) const {
+	virtual double_t calcEstimatedValuesAtPoint(int i, const double_t *params) const {
 		// only positive values allowed (todo: choose the limits)
-		double pL = fmax(params[PARAM_L], minParamL);
-		double pT = fmax(params[PARAM_T], minParamT);
-		double pT2 = fmax(params[PARAM_T2], minParamT);
-		double pK = (fabs(params[PARAM_K]) < minParamK) ? minParamK : params[PARAM_K];
+		double_t pL = fmax(params[PARAM_L], minParamL);
+		double_t pT = fmax(params[PARAM_T], minParamT);
+		double_t pT2 = fmax(params[PARAM_T2], minParamT);
+		double_t pK = (fabs(params[PARAM_K]) < minParamK) ? minParamK : params[PARAM_K];
 
 		// state-space params
-		double lambda = exp(-1.0 / (pT * inputFunc->getTimeScale()));
-		double lambda2 = exp(-1.0 / (pT2 * inputFunc->getTimeScale()));
+		double_t lambda = exp(-1.0 / (pT * inputFunc->getTimeScale()));
+		double_t lambda2 = exp(-1.0 / (pT2 * inputFunc->getTimeScale()));
 
 		// todo: find better initial values?
-		double x = inputFunc->getValue(0, 0) * pK;
-		double y = inputFunc->getValue(0, 0) * pK;
+		double_t x = inputFunc->getValue(0, 0) * pK;
+		double_t y = inputFunc->getValue(0, 0) * pK;
 
 		// The SO response function is indirect, so we need to iterate all previous values to find the current one
 		for (int j = 0; j <= i; j++) {
 			// delayed input
-			double inp = inputFunc->getValue((double)j, pL);
+			double_t inp = inputFunc->getValue((double_t)j, pL);
 
 			// indirect model response in Controllable Canonical Form (2nd order CCF)
 			y = lambda2 * y + (1.0 - lambda2) * x;
@@ -247,12 +247,12 @@ public:
 // See: findSecondOrderInitialParamsHarriot() and "Harriot P. Process control (1964). McGraw-Hill. USA."
 class HarriotFunction {
 public:
-	double getValue(double x) const {
-		return buf.getValue((float)((x - 2.8 / 719.0 - 0.26) * 719.0 / 2.8));
+	double_t getValue(double_t x) const {
+		return buf.getValue((float_t)((x - 2.8 / 719.0 - 0.26) * 719.0 / 2.8));
 	}
 
-	static constexpr double minX = 2.8 / 719.0 - 0.26;
-	static constexpr double maxX = 33 / 719.0 * 2.8 + minX;
+	static constexpr double_t minX = 2.8 / 719.0 - 0.26;
+	static constexpr double_t maxX = 33 / 719.0 * 2.8 + minX;
 
 private:
 	const AveragingDataBuffer<34> buf = { {

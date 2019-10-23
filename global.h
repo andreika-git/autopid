@@ -14,13 +14,19 @@
 #include "gmock/gmock.h"
 
 
+//!!!!!!!!!!!!!!
+#define float_t double_t
+
 #ifndef CONTROLLERS_GENERATED_ENGINE_CONFIGURATION_GENERATED_STRUCTURES_H
 struct pid_s {
-	float pFactor;
-	float iFactor;
-	float dFactor;
-	float offset;
-	float periodMs;
+	float_t pFactor;
+	float_t iFactor;
+	float_t dFactor;
+	float_t offset;
+	float_t periodMs;
+
+	float_t antiwindupFreq;		// = 1/ResetTime
+	float_t derivativeFilterLoss;	// = 1/Gain
 
 	int16_t minValue;
 	int16_t maxValue;

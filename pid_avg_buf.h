@@ -25,7 +25,7 @@ public:
 		scaleShift = 0;
 	}
 
-	void addDataPoint(float v) {
+	void addDataPoint(float_t v) {
 		int idx;
 
 		for (;;) {
@@ -41,7 +41,7 @@ public:
 			}
 			scaleShift++;
 		}
-		float numInTheCell = (float)(num - ((num >> scaleShift) << scaleShift));
+		float_t numInTheCell = (float_t)(num - ((num >> scaleShift) << scaleShift));
 		buf[idx] *= numInTheCell;
 		buf[idx] += v;
 		buf[idx] /= (numInTheCell + 1.0f);
@@ -52,12 +52,12 @@ public:
 		return (num < 1) ? 1 : ((num - 1) >> scaleShift) + 1;
 	}
 
-	float const *getBuf() const {
+	float_t const *getBuf() const {
 		return buf;
 	}
 
 	// This is a robust method for all rational indices
-	float getValue(float i) const {
+	float_t getValue(float_t i) const {
 		// todo: this works only for scale=1 :(
 		assert(scaleShift == 0);
 
@@ -76,20 +76,20 @@ public:
 		if (I >= num - 1)
 			return buf[num - 1];
 		// get 2 closest values and interpolate
-		float fract = i - I;
+		float_t fract = i - I;
 		return buf[I + 1] * fract + buf[I] * (1.0f - fract);
 	}
 
-	float getAveragedData(int from, int to) const {
-		float avg = 0.0f;
+	float_t getAveragedData(int from, int to) const {
+		float_t avg = 0.0f;
 		for (int i = from; i <= to; i++) {
 			avg += buf[i];
 		}
-		avg /= (float)(to - from + 1);
+		avg /= (float_t)(to - from + 1);
 		return avg;
 	}
 
-	int findDataAt(float v, int from, int to) const {
+	int findDataAt(float_t v, int from, int to) const {
 		for (int i = from; i <= to; i++) {
 			if (buf[i] > v)
 				return i;
@@ -98,8 +98,8 @@ public:
 	}
 
 	// integrating using simple trapezoidal method
-	float getArea(int from, int to, float v0) const {
-		float sum = 0.0f;
+	float_t getArea(int from, int to, float_t v0) const {
+		float_t sum = 0.0f;
 		for (int i = from; i < to; i++) {
 			sum += buf[i] + buf[i + 1] - 2.0f * v0;
 		}
@@ -108,7 +108,7 @@ public:
 	}
 
 public:
-	float buf[maxPoints];
+	float_t buf[maxPoints];
 	int num = 0;
 	int scaleShift = 0;
 };

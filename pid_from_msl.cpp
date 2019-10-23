@@ -14,7 +14,7 @@
 
 class MslData {
 public:
-	bool readMsl(const char *fname, double startTime, double endTime, int inputIdx, int outputIdx) {
+	bool readMsl(const char *fname, double_t startTime, double_t endTime, int inputIdx, int outputIdx) {
 		std::ifstream fp(fname);
 
 		if (!fp)
@@ -43,11 +43,11 @@ public:
 		return true;
 	}
 
-	bool parseLine(const std::string & str, double startTime, double endTime, int inputIdx, int outputIdx) {
+	bool parseLine(const std::string & str, double_t startTime, double_t endTime, int inputIdx, int outputIdx) {
 		std::stringstream sstr(str);
 		std::string item;
 		for (int j = 0; getline(sstr, item, '\t'); j++) {
-			double v = atof(item.c_str());
+			double_t v = atof(item.c_str());
 			// the first column is timestamp
 			if (j == 0) {
 				if (v < startTime || v > endTime)
@@ -67,7 +67,7 @@ public:
 				}
 				curIdx++;
 			} else if (j == outputIdx) {
-				data.push_back((float)v);
+				data.push_back((float_t)v);
 				if (curIdx >= 0 && settings.stepPoint < 0) {
 					// calculate averaged level to determine the acceptable noise level
 					averagedMin = (averagedMin * (curIdx - 1) + v) / curIdx;
@@ -79,14 +79,14 @@ public:
 		return true;
 	}
 
-	double getSaturationStartPoint() {
+	double_t getSaturationStartPoint() {
 		int i;
-		double j;
+		double_t j;
 		// max noise level is used to get the saturation limit of the signal
-		double curNoiseLevel = 0, averagedMax = 0;
+		double_t curNoiseLevel = 0, averagedMax = 0;
 		// we step back some points from the last one and find the saturation start
 		for (i = curIdx - 1, j = 1.0; i > settings.stepPoint; i--, j += 1.0) {
-			double v = data[i];
+			double_t v = data[i];
 			averagedMax = (averagedMax * (j - 1) + v) / j;
 			// this is not accurate because 'averagedMax' is continuously changing
 			curNoiseLevel = std::max(curNoiseLevel, abs(v - averagedMax));
@@ -102,16 +102,16 @@ public:
 	}
 
 public:
-	std::vector<float> data;
-	double totalTime = 0, prevTime = 0;
+	std::vector<float_t> data;
+	double_t totalTime = 0, prevTime = 0;
 	PidAutoTuneSettings settings;
 	int curIdx = -1;
-	float prevV = 0;
+	float_t prevV = 0;
 	
 	// we assume that the signal is quasi-stable (asymptotic) from the start point until the 'stepPoint';
 	// it's noise level is used to find the saturation limit of the rest of the data (see getSaturationStartPoint())
-	double acceptableNoiseLevel = 0;
-	double averagedMin = 0;
+	double_t acceptableNoiseLevel = 0;
+	double_t averagedMin = 0;
 };
 
 const char *getMethodName(pid_tune_method_e method) {
@@ -139,28 +139,30 @@ const char *getSimTypeName(pid_sim_type_e simType) {
 #if 1
 int main(int argc, char **argv) {
 	if (argc < 6) {
-		printf("Usage: PID_FROM_MSL file.msl start_time end_time input_column output_column...\r\n");
+		printf("Usage: PID_FROM_MSL <file.msl> <startTime> <endTime> <inputColumnIdx> <outputColumnIdx> [<targetValue>]\r\n");
 		return -1;
 	}
 	
 	printf("PID_FROM_MSL - find PID controller coefficients based on a measured step response in a rusEFI log file.\r\n");
-	printf("Version 0.2 (c) andreika, 2019\r\n\r\n");
+	printf("Version 0.3 (c) andreika, 2019\r\n\r\n");
 	printf("Reading file %s...\r\n", argv[1]);
 	
 	MslData data;
 	if (!data.readMsl(argv[1], atof(argv[2]), atof(argv[3]), atoi(argv[4]), atoi(argv[5]))) {
-		printf("Usage: PID_FROM_MSL <file.msl> <startTime> <endTime> <inColumnIdx> <outColumnIdx> [<targetValue>]\r\n");
+		printf("Error reading from the file!\r\n");
 		return -2;
 	}
 
 	// Target value is optional, for PID_SIM_REGULATOR only
-	data.settings.targetValue = (argc > 6) ? atof(argv[6]) : 0.0;
+	data.settings.targetValue = (argc > 6) ? atof(argv[6]) : NAN;
 
-	printf("Measuring Settings: targetValue=%g minValue=%g maxValue=%g stepPoint=%g maxPoint=%g numPoints=%d timeScale=%g\r\n",
-		data.settings.targetValue, data.settings.minValue, data.settings.maxValue,
-		data.settings.stepPoint, data.settings.maxPoint, data.data.size(), data.settings.timeScale);
+	printf("Project Settings: FLT_EVAL_METHOD=%d sizeof(float_t)=%d sizeof(double_t)=%d\r\n", FLT_EVAL_METHOD, sizeof(float_t), sizeof(double_t));
+	printf("Measuring Settings: targetValue=%Lg minValue=%Lg maxValue=%Lg stepPoint=%Lg maxPoint=%Lg numPoints=%d timeScale=%Lg\r\n",
+		(long double)data.settings.targetValue, (long double)data.settings.minValue, (long double)data.settings.maxValue,
+		(long double)data.settings.stepPoint, (long double)data.settings.maxPoint, data.data.size(), (long double)data.settings.timeScale);
 
 	PidAutoTune chr1, chr2;
+
 	static const int numPids = 2;
 	PidAutoTune *chr[numPids] = { &chr1, &chr2 };
 	
@@ -181,38 +183,39 @@ int main(int argc, char **argv) {
 
 	printf("Done!\r\n");
 
-	// todo: is it correct?
-	double dTime = 1.0 / data.settings.timeScale;
 	const int numSimPoints = 1024;
 
 	pid_s bestPid;
-	double smallestItae = DBL_MAX;
-	for (int k = 0; k < 2; k++) {
-		const double *p = chr[k]->getParams();
-		printf("Model-%d Params: K=%g T1=%g T2=%g L=%g\r\n", (k + 1), p[PARAM_K], p[PARAM_T], p[PARAM_T2], p[PARAM_L]);
+	double_t smallestMerit = DBL_MAX;
+	for (int k = 0; k < numPids; k++) {
+		const double_t *p = chr[k]->getParams();
+		printf("Model-%d Params: K=%Lg T1=%Lg T2=%Lg L=%Lg\r\n", (k + 1), (long double)p[PARAM_K], (long double)p[PARAM_T], (long double)p[PARAM_T2], (long double)p[PARAM_L]);
 
 		pid_s pid[2] = { chr[k]->getPid0(), chr[k]->getPid() };
 		for (int j = 0; j < 2; j++) {
-
+			double_t dTime = pid[j].periodMs / 1000.0;
 			const char *csvName = (j == 0) ? ((k == 0) ? "pid_test01.csv" : "pid_test02.csv") : ((k == 0) ? "pid_test1.csv" : "pid_test2.csv");
 			
-			PidSimulator<numSimPoints> sim1(simTypes[k], chr[k]->getMethodOrder(methods[k]),
-					chr[k]->getAvgMeasuredMin(), chr[k]->getAvgMeasuredMax(), dTime, chr[k]->getModelBias(), csvName);
+			PidSimulator<numSimPoints> sim(simTypes[k], chr[k]->getMethodOrder(methods[k]),
+					chr[k]->getAvgMeasuredMin(), chr[k]->getAvgMeasuredMax(), data.settings.targetValue, dTime, chr[k]->getModelBias(), csvName);
 
-			PidAccuracyMetric metric = sim1.simulate(numSimPoints, pid[j], p);
+			sim.setModelParams(p);
+			PidAccuracyMetric metric = sim.simulate(numSimPoints, pid[j]);
 			
-			printf("  PID%d: P=%.8f I=%.8f D=%.8f offset=%.8f period=%.8fms\r\n", j, pid[j].pFactor, pid[j].iFactor, pid[j].dFactor, pid[j].offset,
-				pid[j].periodMs);
-			printf("  Metric%d result: ITAE=%g ISE=%g Overshoot=%g%%\r\n", j, metric.getItae(), metric.getIse(), metric.getMaxOvershoot() * 100.0);
+			printf("  PID%d: P=%.8Lf I=%.8Lf D=%.8Lf offset=%.8Lf period=%.8Lfms\r\n", j, (long double)pid[j].pFactor, (long double)pid[j].iFactor, (long double)pid[j].dFactor, 
+				(long double)pid[j].offset, (long double)pid[j].periodMs);
+			printf("  Metric%d result: %Lg ITAE=%Lg ISE=%Lg Overshoot=%Lg%%\r\n", j, (long double)metric.getMerit(), (long double)metric.getItae(), (long double)metric.getIse(), 
+				(long double)(metric.getMaxOvershoot() * 100.0));
 
-			if (metric.getItae() < smallestItae) {
-				smallestItae = metric.getItae();
+			if (metric.getMerit() < smallestMerit) {
+				smallestMerit = metric.getMerit();
 				bestPid = pid[j];
 			}
 		}
 	}
 
-	printf("The best PID: P=%.8f I=%.8f D=%.8f offset=%.1f period=%.1fms\r\n", bestPid.pFactor, bestPid.iFactor, bestPid.dFactor, bestPid.offset, bestPid.periodMs);
+	printf("The best PID: P=%.8Lf I=%.8Lf D=%.8Lf offset=%.1Lf period=%.1Lfms\r\n", (long double)bestPid.pFactor, (long double)bestPid.iFactor, (long double)bestPid.dFactor, 
+		(long double)bestPid.offset, (long double)bestPid.periodMs);
 
 	return 0;
 }
