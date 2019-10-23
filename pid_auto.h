@@ -171,6 +171,8 @@ public:
 		// round offset and period due to the firmware limitations...
 		pid.offset = round(getPidOffset(model));
 		pid.periodMs = round((float_t)(1000.0 / settings.timeScale));
+		pid.antiwindupFreq = 0.0;
+		pid.derivativeFilterLoss = 0.0;
 
 		pid0 = pid;
 
